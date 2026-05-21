@@ -17,12 +17,16 @@ import {
 } from './core/daemon'
 import { subscribeLevelsFile, subscribeNdjsonStdout } from './core/logger'
 import { makeOrchestrator } from './core/orchestrator'
+import { requestTrayQuit } from './core/tray'
 import { log } from './log'
 
+/**
+ * Parses the small hand-rolled CLI flag format used by `hpm`.
+ *
+ * Supports `--flag`, `--flag value`, `-x`, and `-x value`. Short and long
+ * flags share the same key namespace without the leading dashes.
+ */
 function parseFlags(argv: string[]): Record<string, string | boolean> {
-  // Accepts both `--foo value` and `-n value` so `hpm logs -n 50` reads naturally
-  // alongside long flags like `--no-follow`. Short and long share the same key
-  // namespace; callers read by the stripped name (e.g. flags["n"], flags["no-follow"]).
   const out: Record<string, string | boolean> = {}
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -42,8 +46,16 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
   return out
 }
 
+/**
+ * Applies capture daemon overrides from CLI flags onto an already loaded config.
+ *
+ * These flags are runtime-only: they affect the daemon invocation but are not
+ * persisted back to `config.yaml`.
+ */
 function applyFlags(cfg: Config, flags: Record<string, string | boolean>) {
+  /** Converts string-valued numeric flags and leaves malformed values as `NaN`. */
   const n = (v: unknown) => (typeof v === 'string' ? Number(v) : NaN)
+  /** Extracts string-valued flags while ignoring boolean switches. */
   const s = (v: unknown) => (typeof v === 'string' ? v : undefined)
   if (flags['screen-interval']) cfg.capture.screen.interval_ms = n(flags['screen-interval'])
   if (flags['audio-chunk']) {
@@ -66,6 +78,12 @@ function applyFlags(cfg: Config, flags: Record<string, string | boolean>) {
   if (dataDir) cfg.storage.path = dataDir
 }
 
+/**
+ * Prints public CLI usage.
+ *
+ * Internal commands prefixed with `_` are intentionally omitted because they are
+ * process entrypoints used by the tray and daemon spawner, not user commands.
+ */
 function help() {
   console.log(`hpm - hyprmnesia
 
@@ -76,6 +94,7 @@ usage:
   hpm logs [-n N] [--no-follow]
                          tail the daemon log (default: last 10 lines + follow)
   hpm stop               stop the running daemon
+  hpm quit               quit the tray icon (daemon keeps running)
   hpm status [--json]    print daemon status
   hpm mcp [flags]        run the read-only MCP server
   hpm version            print version
@@ -101,6 +120,12 @@ flags (for hpm mcp):
 `)
 }
 
+/**
+ * Runs the detached capture worker process.
+ *
+ * This is launched through `_capture` by the daemon spawner. It owns the
+ * orchestrator lifecycle, log subscriptions, and sentinel-file shutdown path.
+ */
 async function cmdCapture(flags: Record<string, string | boolean>) {
   // Internal worker invoked by spawnDaemon. The `_` prefix hides it from help
   // output and signals "not for direct CLI use": users launch the tray with
@@ -118,12 +143,16 @@ async function cmdCapture(flags: Record<string, string | boolean>) {
     await orch.start()
   } catch (err) {
     log.error('failed to start orchestrator', { err: String(err) })
-    await orch.stop().catch(() => {})
+    await orch.stop().catch(() => { })
     process.exit(1)
   }
 
   let shuttingDown = false
   let stopWatch: ReturnType<typeof setInterval>
+  /**
+   * Stops captures exactly once, whether triggered by a process signal or by
+   * the daemon stop sentinel written by `hpm stop`.
+   */
   const shutdown = () => {
     if (shuttingDown) return
     shuttingDown = true
@@ -147,12 +176,23 @@ async function cmdCapture(flags: Record<string, string | boolean>) {
   process.on('SIGTERM', shutdown)
 }
 
+/**
+ * Opens the interactive Ink TUI.
+ *
+ * The TUI can attach to an existing daemon or start one through its keybindings.
+ */
 async function cmdTui() {
   ensureDefaultConfig()
   const { runTui } = await import('./tui/run')
   await runTui()
 }
 
+/**
+ * Starts the read-only MCP server.
+ *
+ * Unlike normal runtime commands, MCP is a headless integration surface and
+ * should not depend on tray or daemon state.
+ */
 async function cmdMcp(flags: Record<string, string | boolean>) {
   const configPath = typeof flags['config'] === 'string' ? flags['config'] : undefined
   const cfg = loadConfig(configPath)
@@ -166,6 +206,9 @@ async function cmdMcp(flags: Record<string, string | boolean>) {
   })
 }
 
+/**
+ * Applies one-shot MCP transport overrides on top of persisted MCP config.
+ */
 function applyMcpFlags(cfg: Config, flags: Record<string, string | boolean>) {
   if (typeof flags['transport'] === 'string') {
     const transport = flags['transport']
@@ -186,6 +229,9 @@ function applyMcpFlags(cfg: Config, flags: Record<string, string | boolean>) {
   }
 }
 
+/**
+ * Converts parsed flags back into argv form for spawned helper processes.
+ */
 function flagsToArgv(flags: Record<string, string | boolean>): string[] {
   const out: string[] = []
   for (const [k, v] of Object.entries(flags)) {
@@ -198,6 +244,11 @@ function flagsToArgv(flags: Record<string, string | boolean>): string[] {
   return out
 }
 
+/**
+ * Starts the detached daemon if it is not already alive.
+ *
+ * Start locking and duplicate-daemon prevention live in `spawnDaemon`.
+ */
 function cmdStartDaemon(flags: Record<string, string | boolean>) {
   if (isDaemonAlive()) {
     console.log(`daemon already running (pid ${daemonPid()})`)
@@ -214,10 +265,16 @@ function cmdStartDaemon(flags: Record<string, string | boolean>) {
   }
 }
 
+/**
+ * Handles the public `hpm start` command.
+ */
 function cmdStart(flags: Record<string, string | boolean>) {
   cmdStartDaemon(flags)
 }
 
+/**
+ * Stops the capture daemon without changing tray state.
+ */
 function cmdStop() {
   const r = stopDaemon()
   if (r.stopped) console.log(`daemon stopped (pid ${r.pid})`)
@@ -225,6 +282,21 @@ function cmdStop() {
   else console.log('no daemon running')
 }
 
+/**
+ * Requests a graceful tray-only quit.
+ *
+ * The daemon keeps running; the native tray consumes the quit sentinel on its
+ * next refresh tick and exits its event loop.
+ */
+function cmdQuit() {
+  const r = requestTrayQuit()
+  if (r.requested) console.log(`tray quit requested (pid ${r.pid})`)
+  else console.log('no tray running')
+}
+
+/**
+ * Builds the machine-readable daemon status payload used by `status --json`.
+ */
 function statusPayload() {
   const pid = daemonPid()
   const running = pid !== undefined && isDaemonAlive()
@@ -237,6 +309,9 @@ function statusPayload() {
   }
 }
 
+/**
+ * Prints daemon status as JSON or human-readable terminal text.
+ */
 function cmdStatus(flags: Record<string, string | boolean>) {
   if (flags['json']) {
     console.log(JSON.stringify(statusPayload()))
@@ -257,6 +332,9 @@ function cmdStatus(flags: Record<string, string | boolean>) {
   }
 }
 
+/**
+ * Tails the daemon log, optionally following it across rotation.
+ */
 function cmdLogs(flags: Record<string, string | boolean>) {
   const rawN = flags['n']
   const n = typeof rawN === 'string' ? Math.max(0, Number(rawN)) : 10
@@ -301,6 +379,9 @@ function cmdLogs(flags: Record<string, string | boolean>) {
     }
   })
 
+  /**
+   * Closes the filesystem watcher before exiting on Ctrl-C/SIGTERM.
+   */
   const cleanup = () => {
     watcher.close()
     process.exit(0)
@@ -309,10 +390,16 @@ function cmdLogs(flags: Record<string, string | boolean>) {
   process.on('SIGTERM', cleanup)
 }
 
+/**
+ * Returns the platform-specific native tray executable name.
+ */
 function trayBinaryName(): string {
   return process.platform === 'win32' ? 'hpm-tray.exe' : 'hpm-tray'
 }
 
+/**
+ * Finds the tray helper in packaged, development, or Cargo output locations.
+ */
 function findTrayBinary(): string | undefined {
   const name = trayBinaryName()
   const candidates = [
@@ -326,6 +413,9 @@ function findTrayBinary(): string | undefined {
   return candidates.find((candidate) => existsSync(candidate))
 }
 
+/**
+ * Launches the native tray supervisor as a detached process.
+ */
 function launchTray(flags: Record<string, string | boolean>, opts: { autoStart: boolean }) {
   const tray = findTrayBinary()
   if (!tray) {
@@ -342,6 +432,9 @@ function launchTray(flags: Record<string, string | boolean>, opts: { autoStart: 
   proc.unref()
 }
 
+/**
+ * Ensures the default config exists and starts the tray for UI-oriented commands.
+ */
 function ensureTray(
   flags: Record<string, string | boolean> = {},
   opts: { autoStart?: boolean } = {},
@@ -384,6 +477,10 @@ switch (cmd) {
   case 'stop':
     ensureTray()
     cmdStop()
+    break
+    case 'quit':
+    cmdStop()
+    cmdQuit()
     break
   case 'status':
     ensureTray()

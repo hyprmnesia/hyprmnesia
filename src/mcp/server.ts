@@ -4,6 +4,7 @@ import {
   clampLimit,
   clampOffset,
   normalizeSource,
+  normalizeSources,
   parseTimestamp,
   ReadStoreError,
   withReadStore,
@@ -46,6 +47,39 @@ const TOOLS = [
     },
   },
   {
+    name: 'recent_activity',
+    description:
+      'Group recent screen, mic, and system audio captures into human-readable activity windows.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        minutes: {
+          type: 'number',
+          minimum: 0.1,
+          maximum: 1440,
+          description: 'Look back this many minutes from "to". Default 5.',
+        },
+        to: {
+          oneOf: [{ type: 'string' }, { type: 'number' }],
+          description:
+            "Optional ISO date or epoch-ms upper bound. Defaults to now. ISO strings without a timezone are interpreted in the user's local timezone.",
+        },
+        sources: {
+          type: 'array',
+          items: { type: 'string', enum: ['screen', 'mic', 'system'] },
+          description: 'Sources to include. Default screen, mic, and system.',
+        },
+        app: { type: 'string', description: 'Optional active app substring filter.' },
+        include_empty: {
+          type: 'boolean',
+          description: 'Default false. Include chunks with no text and no transcript segment.',
+        },
+        limit: { type: 'number', minimum: 1, maximum: 100, description: 'Default 50, max 100.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'timeline',
     description:
       'List captured chunks in chronological order for a time range. Results include both local_* and utc_* timestamps; use local_* when answering the user.',
@@ -68,6 +102,10 @@ const TOOLS = [
           description: 'Optional source filter.',
         },
         app: { type: 'string', description: 'Optional active app substring filter.' },
+        include_empty: {
+          type: 'boolean',
+          description: 'Default false. Include chunks with no text and no transcript segment.',
+        },
         limit: { type: 'number', minimum: 1, maximum: 100, description: 'Default 20, max 100.' },
         offset: { type: 'number', minimum: 0, description: 'Pagination offset.' },
       },
@@ -131,6 +169,12 @@ function boolArg(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
 }
 
+function numberArg(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : fallback
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, n))
+}
+
 function stringArg(args: Record<string, unknown>, key: string): string {
   const value = args[key]
   if (typeof value !== 'string' || value.trim() === '')
@@ -172,6 +216,7 @@ function linesForTimeline(
     id: string
     text: string
     window: { app: string | null; title: string | null }
+    audio?: { state: string; segment_count: number; rms_db: number | null; peak_db: number | null }
   }>,
 ): string {
   if (items.length === 0) return 'No Hyprmnesia captures in this range.'
@@ -179,7 +224,51 @@ function linesForTimeline(
     .slice(0, 12)
     .map((item) => {
       const window = [item.window.app, item.window.title].filter(Boolean).join(' - ')
-      return `- ${item.local_at} ${item.timezone} ${item.source} ${item.id}${window ? ` (${window})` : ''}: ${item.text || '(no text)'}`
+      const audio = item.audio
+        ? ` [${item.audio.state}, segments=${item.audio.segment_count}, rms=${item.audio.rms_db ?? 'n/a'}, peak=${item.audio.peak_db ?? 'n/a'}]`
+        : ''
+      return `- ${item.local_at} ${item.timezone} ${item.source} ${item.id}${window ? ` (${window})` : ''}${audio}: ${item.text || '(no text)'}`
+    })
+    .join('\n')
+}
+
+function linesForRecentActivity(
+  groups: Array<{
+    local_start_at: string
+    local_end_at: string
+    timezone: string
+    sources: string[]
+    window: { app: string | null; title: string | null }
+    url: string | null
+    url_candidate: string | null
+    url_confidence: string
+    text_preview: string
+    counts: { chunks: number; transcript_segments: number }
+    audio: {
+      mic?: { states: string[]; segment_count: number }
+      system?: { states: string[]; segment_count: number }
+    }
+  }>,
+): string {
+  if (groups.length === 0) return 'No recent Hyprmnesia activity in this range.'
+  return groups
+    .slice(0, 8)
+    .map((group) => {
+      const window = [group.window.app, group.window.title].filter(Boolean).join(' - ')
+      const url = group.url
+        ? ` url=${group.url}`
+        : group.url_candidate
+          ? ` url_candidate=${group.url_candidate} (${group.url_confidence})`
+          : ''
+      const audio = [
+        group.audio.system
+          ? `system:${group.audio.system.states.join('|')}/${group.audio.system.segment_count}`
+          : '',
+        group.audio.mic ? `mic:${group.audio.mic.states.join('|')}/${group.audio.mic.segment_count}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+      return `- ${group.local_start_at}..${group.local_end_at} ${group.timezone} [${group.sources.join(',')}]${window ? ` (${window})` : ''}${url} chunks=${group.counts.chunks} transcripts=${group.counts.transcript_segments}${audio ? ` ${audio}` : ''}: ${group.text_preview || '(no text)'}`
     })
     .join('\n')
 }
@@ -208,6 +297,26 @@ async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise
     }
   }
 
+  if (name === 'recent_activity') {
+    const to = parseTimestamp(args['to'], 'to') ?? Date.now()
+    const minutes = numberArg(args['minutes'], 5, 0.1, 1440)
+    const from = to - Math.round(minutes * 60_000)
+    const groups = withReadStore(dbPath, (store) =>
+      store.recentActivity({
+        from,
+        to,
+        sources: normalizeSources(args['sources']),
+        app: typeof args['app'] === 'string' ? args['app'] : undefined,
+        includeEmpty: boolArg(args['include_empty'], false),
+        limit: clampLimit(args['limit'], 50),
+      }),
+    )
+    return {
+      content: [{ type: 'text', text: linesForRecentActivity(groups) }],
+      structuredContent: { groups, count: groups.length, from, to, minutes },
+    }
+  }
+
   if (name === 'timeline') {
     const from = parseTimestamp(args['from'], 'from')
     const to = parseTimestamp(args['to'], 'to')
@@ -220,6 +329,7 @@ async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise
         to,
         source,
         app: typeof args['app'] === 'string' ? args['app'] : undefined,
+        includeEmpty: boolArg(args['include_empty'], false),
         limit: clampLimit(args['limit']),
         offset: clampOffset(args['offset']),
       }),
@@ -278,7 +388,7 @@ function protocolResult(method: string, params: unknown): unknown {
         version: '0.0.1',
       },
       instructions:
-        'Hyprmnesia MCP is local and read-only. Use search for text lookup, timeline for time windows, recall for chunk details, and get_transcript_segment for precise transcript segments. Results include UTC and local timestamps; use local_* timestamps when answering the user.',
+        'Hyprmnesia MCP is local and read-only. Use recent_activity for what-was-I-doing questions, search for text lookup, timeline for exact time windows, recall for chunk details, and get_transcript_segment for precise transcript segments. Results include UTC and local timestamps; use local_* timestamps when answering the user.',
     }
   }
   if (method === 'tools/list') return { tools: TOOLS }

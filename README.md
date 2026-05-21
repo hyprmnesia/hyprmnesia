@@ -63,6 +63,7 @@ bun run src/cli.ts start      # same as above
 bun run src/cli.ts tui        # open the TUI
 bun run src/cli.ts logs       # tail the daemon log (default: last 10 + follow)
 bun run src/cli.ts stop       # stop the daemon
+bun run src/cli.ts quit       # quit the tray icon only
 bun run src/cli.ts status     # print daemon status
 bun run src/cli.ts status --json
 bun run src/cli.ts mcp        # run the read-only MCP stdio server
@@ -76,6 +77,7 @@ bun run build                 # produces dist/hpm
 ./dist/hpm start              # same as above
 ./dist/hpm tui                # open the TUI
 ./dist/hpm logs -n 50         # show last 50 log lines + follow
+./dist/hpm quit               # quit the tray icon only
 ./dist/hpm status --json
 ./dist/hpm mcp                # read-only MCP stdio server
 ```
@@ -125,7 +127,8 @@ Available tools:
 | Tool | Purpose |
 | --- | --- |
 | `search` | FTS search over OCR text, window context, and transcript segments |
-| `timeline` | chronological chunks for a required `from` / `to` range |
+| `recent_activity` | grouped recent screen/audio activity for "what was I doing?" questions |
+| `timeline` | chronological non-empty chunks for a required `from` / `to` range |
 | `recall` | full chunk details plus linked transcript segments |
 | `get_transcript_segment` | one precise transcript segment, optionally with its parent chunk |
 
@@ -133,9 +136,13 @@ Common filters are `from`, `to`, `source` (`screen`, `mic`, `system`), `app`,
 `limit`, and `offset`. Times can be ISO strings or epoch milliseconds; ISO
 strings without a timezone are interpreted in the user's local timezone. Results
 include both UTC fields (`utc_*` / legacy `iso_*`) and local fields (`local_*`
-+ `timezone`); agents should use `local_*` when answering the user. `recall`
-only includes local `blob_path` metadata when `include_blob` is true; v1 does
-not stream screenshots or audio through MCP.
++ `timezone`); agents should use `local_*` when answering the user.
+`timeline` and `recent_activity` hide chunks with no text and no transcript by
+default; pass `include_empty: true` for raw debugging. `recent_activity` also
+returns best-effort URL metadata: native `window_url` when available, otherwise
+an OCR-derived `url_candidate` marked low-confidence. `recall` only includes
+local `blob_path` metadata when `include_blob` is true; v1 does not stream
+screenshots or audio through MCP.
 
 ## Tray App
 
@@ -152,6 +159,9 @@ Tray menu:
 - `Open log folder`: opens `~/.hyprmnesia/`
 - `Enable launch at login` / `Disable launch at login`
 - `Quit Hyprmnesia`: removes the tray icon only; it does not stop captures
+
+`hpm quit` performs the same tray-only quit from the CLI. `hpm stop` stops the
+daemon and does not launch or relaunch the tray.
 
 ## Daemon Model
 

@@ -2,6 +2,12 @@ import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 
 type SourceFilter = 'screen' | 'mic' | 'system'
+type AudioState =
+  | 'recording'
+  | 'transcribed'
+  | 'pending'
+  | 'quiet_no_transcript'
+  | 'captured_no_transcript'
 
 interface TimeRange {
   from?: number
@@ -13,6 +19,16 @@ export interface QueryFilters extends TimeRange {
   app?: string
   limit?: number
   offset?: number
+  includeEmpty?: boolean
+}
+
+export interface RecentActivityFilters {
+  from: number
+  to: number
+  sources: SourceFilter[]
+  app?: string
+  limit?: number
+  includeEmpty?: boolean
 }
 
 interface WindowPayload {
@@ -64,6 +80,59 @@ export interface TimelineItem {
   has_blob: boolean
   bytes: number
   window: WindowPayload
+  segment_count: number
+  audio?: AudioDiagnostics
+}
+
+interface AudioDiagnostics {
+  rms_db: number | null
+  peak_db: number | null
+  engine: string | null
+  device: string | null
+  segment_count: number
+  state: AudioState
+}
+
+export interface ActivityGroup {
+  id: string
+  start_at: number
+  timezone: string
+  local_start_at: string
+  utc_start_at: string
+  iso_start_at: string
+  end_at: number
+  local_end_at: string
+  utc_end_at: string
+  iso_end_at: string
+  duration_ms: number
+  sources: Array<'screen' | 'mic' | 'system'>
+  window: WindowPayload
+  url: string | null
+  url_candidate: string | null
+  url_source: 'native' | 'ocr_candidate' | 'none'
+  url_confidence: 'high' | 'low' | 'none'
+  text_preview: string
+  chunk_ids: string[]
+  chunk_ids_by_source: Record<'screen' | 'mic' | 'system', string[]>
+  counts: {
+    chunks: number
+    screen: number
+    mic: number
+    system: number
+    transcript_segments: number
+  }
+  audio: {
+    mic?: AudioGroupDiagnostics
+    system?: AudioGroupDiagnostics
+  }
+}
+
+interface AudioGroupDiagnostics {
+  segment_count: number
+  states: AudioState[]
+  rms_db_min: number | null
+  rms_db_max: number | null
+  peak_db_max: number | null
 }
 
 interface TranscriptSegment {
@@ -126,6 +195,7 @@ interface ChunkRow {
   audio_chunk_ms: number | null
   audio_rms_db: number | null
   audio_peak_db: number | null
+  segment_count?: number
 }
 
 interface SegmentRow {
@@ -198,6 +268,17 @@ export function normalizeSource(value: unknown): SourceFilter | undefined {
   throw new ReadStoreError('source must be one of: screen, mic, system')
 }
 
+export function normalizeSources(value: unknown): SourceFilter[] {
+  if (value === undefined || value === null || value === '') return ['screen', 'mic', 'system']
+  if (!Array.isArray(value)) throw new ReadStoreError('sources must be an array')
+  const out: SourceFilter[] = []
+  for (const item of value) {
+    const source = normalizeSource(item)
+    if (source && !out.includes(source)) out.push(source)
+  }
+  return out.length > 0 ? out : ['screen', 'mic', 'system']
+}
+
 function buildFtsQuery(query: unknown): string {
   if (typeof query !== 'string' || query.trim() === '') {
     throw new ReadStoreError('query is required')
@@ -254,6 +335,19 @@ function excerpt(text: string | null | undefined, max = 280): string {
   return `${normalized.slice(0, max - 3).trimEnd()}...`
 }
 
+function textPresent(text: string | null | undefined): boolean {
+  return (text ?? '').trim().length > 0
+}
+
+function audioRange(values: Array<number | null | undefined>): {
+  min: number | null
+  max: number | null
+} {
+  const nums = values.filter((value): value is number => typeof value === 'number')
+  if (nums.length === 0) return { min: null, max: null }
+  return { min: Math.min(...nums), max: Math.max(...nums) }
+}
+
 function mimeForKind(kind: ChunkRow['kind'], blob: string): string {
   const lower = blob.toLowerCase()
   if (kind === 'screenshot')
@@ -261,10 +355,25 @@ function mimeForKind(kind: ChunkRow['kind'], blob: string): string {
   return 'audio/wav'
 }
 
-function toTimelineItem(row: ChunkRow): TimelineItem {
+function audioState(row: ChunkRow, segmentCount: number, now = Date.now()): AudioState {
+  if (row.kind === 'screenshot') return 'captured_no_transcript'
+  if (segmentCount > 0 || textPresent(row.text)) return 'transcribed'
+  if (!row.end_at || row.bytes <= 0) return 'recording'
+  const endedAt = row.end_at ?? row.at
+  if (row.audio_engine === 'pending' && now - endedAt < 120_000) return 'pending'
+  if (
+    (typeof row.audio_peak_db === 'number' && row.audio_peak_db <= -75) ||
+    (typeof row.audio_rms_db === 'number' && row.audio_rms_db <= -85)
+  ) {
+    return 'quiet_no_transcript'
+  }
+  return 'captured_no_transcript'
+}
+
+function toTimelineItem(row: ChunkRow, segmentCount = row.segment_count ?? 0): TimelineItem {
   const start = row.start_at ?? row.at
   const end = row.end_at
-  return {
+  const item: TimelineItem = {
     id: row.id,
     kind: row.kind,
     source: chunkSource(row.kind),
@@ -287,7 +396,19 @@ function toTimelineItem(row: ChunkRow): TimelineItem {
     has_blob: row.bytes > 0 && existsSync(row.blob),
     bytes: row.bytes,
     window: windowFromRow(row),
+    segment_count: segmentCount,
   }
+  if (row.kind !== 'screenshot') {
+    item.audio = {
+      rms_db: row.audio_rms_db,
+      peak_db: row.audio_peak_db,
+      engine: row.audio_engine,
+      device: row.audio_device,
+      segment_count: segmentCount,
+      state: audioState(row, segmentCount),
+    }
+  }
+  return item
 }
 
 function toSegment(row: SegmentRow): TranscriptSegment {
@@ -307,6 +428,162 @@ function toSegment(row: SegmentRow): TranscriptSegment {
     text: row.text,
     engine: row.engine,
     transcribe_ms: row.transcribe_ms,
+  }
+}
+
+interface ActivityAccumulator {
+  id: string
+  key: string
+  start_at: number
+  end_at: number
+  window: WindowPayload
+  chunks: TimelineItem[]
+  fullTextParts: string[]
+  sources: Set<'screen' | 'mic' | 'system'>
+  chunk_ids_by_source: Record<'screen' | 'mic' | 'system', string[]>
+  transcriptSegments: number
+}
+
+function rowStart(row: ChunkRow): number {
+  return row.start_at ?? row.at
+}
+
+function rowEnd(row: ChunkRow): number {
+  return row.end_at ?? row.at
+}
+
+function hasWindow(row: ChunkRow): boolean {
+  return Boolean(row.window_url || row.window_app || row.window_title)
+}
+
+function windowKey(row: ChunkRow): string | undefined {
+  if (row.window_url) return `url:${row.window_url}`
+  if (row.window_app || row.window_title) return `window:${row.window_app ?? ''}|${row.window_title ?? ''}`
+  return undefined
+}
+
+function sourceOrder(source: 'screen' | 'mic' | 'system'): number {
+  if (source === 'screen') return 0
+  if (source === 'system') return 1
+  return 2
+}
+
+function extractUrlCandidate(text: string): string | null {
+  const match = text.match(
+    /\b(?:https?:\/\/|www\.)[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"']+)/i,
+  )
+  if (!match?.[0]) return null
+  const candidate = match[0].replace(/[),.;:!?]+$/g, '')
+  return candidate.includes('.') ? candidate : null
+}
+
+function createActivity(row: ChunkRow, key: string): ActivityAccumulator {
+  const item = toTimelineItem(row)
+  return {
+    id: `activity:${row.id}`,
+    key,
+    start_at: rowStart(row),
+    end_at: rowEnd(row),
+    window: item.window,
+    chunks: [],
+    fullTextParts: [],
+    sources: new Set(),
+    chunk_ids_by_source: { screen: [], mic: [], system: [] },
+    transcriptSegments: 0,
+  }
+}
+
+function addRowToActivity(group: ActivityAccumulator, row: ChunkRow): void {
+  const item = toTimelineItem(row)
+  const source = item.source
+  group.start_at = Math.min(group.start_at, rowStart(row))
+  group.end_at = Math.max(group.end_at, rowEnd(row))
+  group.chunks.push(item)
+  group.sources.add(source)
+  group.chunk_ids_by_source[source].push(row.id)
+  group.transcriptSegments += item.segment_count
+  if (textPresent(row.text)) group.fullTextParts.push(row.text)
+  if (!group.window.url && item.window.url) group.window.url = item.window.url
+  if (!group.window.app && item.window.app) group.window.app = item.window.app
+  if (!group.window.title && item.window.title) group.window.title = item.window.title
+  if (!group.window.pid && item.window.pid) group.window.pid = item.window.pid
+}
+
+function canAppendToWindowGroup(group: ActivityAccumulator, row: ChunkRow): boolean {
+  const key = windowKey(row)
+  return Boolean(key && group.key === key && rowStart(row) - group.end_at <= 30_000)
+}
+
+function overlaps(group: ActivityAccumulator, row: ChunkRow): boolean {
+  return rowStart(row) <= group.end_at && rowEnd(row) >= group.start_at
+}
+
+function findRecentGroup(
+  groups: ActivityAccumulator[],
+  predicate: (group: ActivityAccumulator) => boolean,
+): ActivityAccumulator | undefined {
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const group = groups[i]
+    if (group && predicate(group)) return group
+  }
+  return undefined
+}
+
+function audioSummary(
+  items: TimelineItem[],
+  source: 'mic' | 'system',
+): AudioGroupDiagnostics | undefined {
+  const audio = items.filter((item) => item.source === source && item.audio)
+  if (audio.length === 0) return undefined
+  const rms = audioRange(audio.map((item) => item.audio?.rms_db))
+  const peak = audioRange(audio.map((item) => item.audio?.peak_db))
+  const states = Array.from(new Set(audio.map((item) => item.audio!.state)))
+  return {
+    segment_count: audio.reduce((sum, item) => sum + (item.audio?.segment_count ?? 0), 0),
+    states,
+    rms_db_min: rms.min,
+    rms_db_max: rms.max,
+    peak_db_max: peak.max,
+  }
+}
+
+function toActivityGroup(group: ActivityAccumulator): ActivityGroup {
+  const sortedChunks = [...group.chunks].sort((a, b) => a.at - b.at || sourceOrder(a.source) - sourceOrder(b.source))
+  const nativeUrl = group.window.url
+  const text = group.fullTextParts.join(' ')
+  const candidate = nativeUrl ? null : extractUrlCandidate(text)
+  return {
+    id: group.id,
+    start_at: group.start_at,
+    timezone: LOCAL_TIMEZONE,
+    local_start_at: localIso(group.start_at)!,
+    utc_start_at: iso(group.start_at)!,
+    iso_start_at: iso(group.start_at)!,
+    end_at: group.end_at,
+    local_end_at: localIso(group.end_at)!,
+    utc_end_at: iso(group.end_at)!,
+    iso_end_at: iso(group.end_at)!,
+    duration_ms: Math.max(0, group.end_at - group.start_at),
+    sources: (['screen', 'system', 'mic'] as const).filter((source) => group.sources.has(source)),
+    window: group.window,
+    url: nativeUrl,
+    url_candidate: candidate,
+    url_source: nativeUrl ? 'native' : candidate ? 'ocr_candidate' : 'none',
+    url_confidence: nativeUrl ? 'high' : candidate ? 'low' : 'none',
+    text_preview: excerpt(text, 600),
+    chunk_ids: sortedChunks.map((item) => item.id),
+    chunk_ids_by_source: group.chunk_ids_by_source,
+    counts: {
+      chunks: sortedChunks.length,
+      screen: group.chunk_ids_by_source.screen.length,
+      mic: group.chunk_ids_by_source.mic.length,
+      system: group.chunk_ids_by_source.system.length,
+      transcript_segments: group.transcriptSegments,
+    },
+    audio: {
+      mic: audioSummary(sortedChunks, 'mic'),
+      system: audioSummary(sortedChunks, 'system'),
+    },
   }
 }
 
@@ -450,24 +727,112 @@ export class HyprmnesiaReadStore {
       $to: filters.to,
       $kind: kindForSource(source) ?? null,
       $app: filters.app ? `%${filters.app}%` : null,
+      $include_empty: filters.includeEmpty ? 1 : 0,
       $limit: limit,
       $offset: offset,
     }
     const rows = this.db
       .query<ChunkRow, typeof params>(
         `
-        SELECT *
-        FROM chunks
-        WHERE at >= $from
-          AND at <= $to
-          AND ($kind IS NULL OR kind = $kind)
-          AND ($app IS NULL OR window_app LIKE $app)
+        SELECT c.*,
+               (SELECT COUNT(*) FROM transcript_segments s WHERE s.chunk_id = c.id) AS segment_count
+        FROM chunks c
+        WHERE c.at >= $from
+          AND c.at <= $to
+          AND ($kind IS NULL OR c.kind = $kind)
+          AND ($app IS NULL OR c.window_app LIKE $app)
+          AND (
+            $include_empty = 1
+            OR COALESCE(c.text, '') <> ''
+            OR EXISTS (SELECT 1 FROM transcript_segments sx WHERE sx.chunk_id = c.id)
+          )
         ORDER BY at ASC
         LIMIT $limit OFFSET $offset
       `,
       )
       .all(params)
     return rows.map(toTimelineItem)
+  }
+
+  recentActivity(filters: RecentActivityFilters): ActivityGroup[] {
+    const limit = clampLimit(filters.limit, 50)
+    const kinds = new Set(filters.sources.map(kindForSource).filter(Boolean))
+    const rawLimit = Math.min(500, Math.max(100, limit * 12))
+    const params = {
+      $from: filters.from,
+      $to: filters.to,
+      $include_screen: kinds.has('screenshot') ? 1 : 0,
+      $include_mic: kinds.has('audio_mic') ? 1 : 0,
+      $include_system: kinds.has('audio_system') ? 1 : 0,
+      $app: filters.app ? `%${filters.app}%` : null,
+      $include_empty: filters.includeEmpty ? 1 : 0,
+      $limit: rawLimit,
+    }
+    const rows = this.db
+      .query<ChunkRow, typeof params>(
+        `
+        SELECT c.*,
+               (SELECT COUNT(*) FROM transcript_segments s WHERE s.chunk_id = c.id) AS segment_count
+        FROM chunks c
+        WHERE c.at >= $from
+          AND c.at <= $to
+          AND (
+            ($include_screen = 1 AND c.kind = 'screenshot')
+            OR ($include_mic = 1 AND c.kind = 'audio_mic')
+            OR ($include_system = 1 AND c.kind = 'audio_system')
+          )
+          AND ($app IS NULL OR c.window_app LIKE $app)
+          AND (
+            $include_empty = 1
+            OR COALESCE(c.text, '') <> ''
+            OR EXISTS (SELECT 1 FROM transcript_segments sx WHERE sx.chunk_id = c.id)
+          )
+        ORDER BY c.at DESC
+        LIMIT $limit
+      `,
+      )
+      .all(params)
+      .sort((a, b) => a.at - b.at)
+
+    const groups: ActivityAccumulator[] = []
+    const unwindowedAudio: ChunkRow[] = []
+
+    for (const row of rows) {
+      const key = windowKey(row)
+      const isAudio = row.kind !== 'screenshot'
+      if (!key && isAudio && !hasWindow(row)) {
+        unwindowedAudio.push(row)
+        continue
+      }
+      const effectiveKey = key ?? `source:${chunkSource(row.kind)}`
+      let group = findRecentGroup(groups, (candidate) => canAppendToWindowGroup(candidate, row))
+      if (!group) {
+        group = createActivity(row, effectiveKey)
+        groups.push(group)
+      }
+      addRowToActivity(group, row)
+    }
+
+    for (const row of unwindowedAudio) {
+      let group = findRecentGroup(groups, (candidate) => candidate.sources.has('screen') && overlaps(candidate, row))
+      if (!group) {
+        const key = `audio:${chunkSource(row.kind)}`
+        group = findRecentGroup(
+          groups,
+          (candidate) => candidate.key === key && rowStart(row) - candidate.end_at <= 30_000,
+        )
+      }
+      if (!group) {
+        group = createActivity(row, `audio:${chunkSource(row.kind)}`)
+        groups.push(group)
+      }
+      addRowToActivity(group, row)
+    }
+
+    const ordered = groups
+      .sort((a, b) => a.start_at - b.start_at)
+      .map(toActivityGroup)
+    return ordered.slice(Math.max(0, ordered.length - limit))
   }
 
   recall(id: string, includeBlob: boolean): RecallResult {
@@ -485,7 +850,7 @@ export class HyprmnesiaReadStore {
       .all(id)
       .map(toSegment)
     const chunk = {
-      ...toTimelineItem(row),
+      ...toTimelineItem(row, segments.length),
       text: row.text ?? '',
       ocr_engine: row.ocr_engine,
       audio_engine: row.audio_engine,

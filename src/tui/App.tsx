@@ -205,7 +205,7 @@ export function App({ orch }: { orch: Orchestrator }) {
           ok ? 'daemon restarted with saved settings' : 'daemon restart failed; check logs',
         )
       },
-      quit: () => {
+      exit: () => {
         orch.dispose?.()
         exit()
       },
@@ -219,7 +219,7 @@ export function App({ orch }: { orch: Orchestrator }) {
       if (!field) return
 
       if (key.ctrl && input === 'c') {
-        actions.quit()
+        actions.exit()
         return
       }
 
@@ -246,8 +246,8 @@ export function App({ orch }: { orch: Orchestrator }) {
         return
       }
 
-      if (input === 'q') {
-        actions.quit()
+      if (input === 'e') {
+        actions.exit()
       } else if (key.escape || input === 'c') {
         setSettingsOpen(false)
       } else if (input === 'l') {
@@ -274,8 +274,8 @@ export function App({ orch }: { orch: Orchestrator }) {
       return
     }
 
-    if (input === 'q' || (key.ctrl && input === 'c')) {
-      actions.quit()
+    if (input === 'e' || (key.ctrl && input === 'c')) {
+      actions.exit()
     } else if (input === 'x') {
       actions.toggleStartStop()
     } else if (input === 'r') {

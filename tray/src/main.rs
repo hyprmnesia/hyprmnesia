@@ -84,6 +84,7 @@ fn main() {
         Ok(lock) => lock,
         Err(_) => return,
     };
+    clear_tray_quit_request();
 
     let paths = match resolve_paths() {
         Ok(paths) => paths,
@@ -108,6 +109,10 @@ fn main() {
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + REFRESH_EVERY);
+        if take_tray_quit_request() {
+            *control_flow = ControlFlow::Exit;
+            return;
+        }
 
         match event {
             Event::NewEvents(StartCause::Init) => {
@@ -314,6 +319,26 @@ fn start_daemon_if_needed(paths: &AppPaths) {
     if !read_status(paths).running {
         let _ = start_daemon(paths);
     }
+}
+
+fn tray_stop_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".hyprmnesia")
+        .join("tray.stop")
+}
+
+fn clear_tray_quit_request() {
+    let _ = std::fs::remove_file(tray_stop_path());
+}
+
+fn take_tray_quit_request() -> bool {
+    let path = tray_stop_path();
+    if !path.exists() {
+        return false;
+    }
+    let _ = std::fs::remove_file(path);
+    true
 }
 
 fn acquire_tray_lock() -> io::Result<std::fs::File> {

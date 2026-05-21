@@ -22,8 +22,8 @@ export function Footer({
         <Text dimColor>{settingsOpen ? ' close settings  ' : ' settings  '}</Text>
         <Text color="cyan">[l]</Text>
         <Text dimColor>{logsOpen ? ' close logs  ' : ' logs  '}</Text>
-        <Text color="cyan">[q]</Text>
-        <Text dimColor> quit</Text>
+        <Text color="cyan">[e]</Text>
+        <Text dimColor> exit</Text>
       </Text>
     </Box>
   )

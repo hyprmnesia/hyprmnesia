@@ -485,7 +485,18 @@ function startStream(
       return
     }
     currentProc = proc
-    const stderrText = new Response(proc.stderr).text()
+    const stderrText =
+      proc.stderr instanceof ReadableStream ? new Response(proc.stderr).text() : Promise.resolve('')
+    if (!(proc.stdout instanceof ReadableStream)) {
+      proc.kill()
+      events.publish({
+        type: 'error',
+        source,
+        at: Date.now(),
+        message: `ffmpeg (${source}) did not expose a readable PCM stdout stream`,
+      })
+      return
+    }
 
     events.publish({
       type: 'started',
