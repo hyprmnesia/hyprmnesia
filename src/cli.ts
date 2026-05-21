@@ -94,7 +94,7 @@ usage:
   hpm logs [-n N] [--no-follow]
                          tail the daemon log (default: last 10 lines + follow)
   hpm stop               stop the running daemon
-  hpm quit               quit the tray icon (daemon keeps running)
+  hpm quit               stop the daemon and quit the tray icon
   hpm status [--json]    print daemon status
   hpm mcp [flags]        run the read-only MCP server
   hpm version            print version
@@ -266,13 +266,6 @@ function cmdStartDaemon(flags: Record<string, string | boolean>) {
 }
 
 /**
- * Handles the public `hpm start` command.
- */
-function cmdStart(flags: Record<string, string | boolean>) {
-  cmdStartDaemon(flags)
-}
-
-/**
  * Stops the capture daemon without changing tray state.
  */
 function cmdStop() {
@@ -283,10 +276,11 @@ function cmdStop() {
 }
 
 /**
- * Requests a graceful tray-only quit.
+ * Requests a graceful tray quit. Pair with `cmdStop()` for a full shutdown —
+ * the `quit` command stops the daemon first, then signals the tray.
  *
- * The daemon keeps running; the native tray consumes the quit sentinel on its
- * next refresh tick and exits its event loop.
+ * The native tray consumes the quit sentinel on its next refresh tick and
+ * exits its event loop.
  */
 function cmdQuit() {
   const r = requestTrayQuit()
@@ -458,7 +452,7 @@ switch (cmd) {
   case undefined:
   case 'start':
     ensureTray(flags)
-    cmdStart(flags)
+    cmdStartDaemon(flags)
     break
   case '_daemon':
     cmdStartDaemon(flags)
@@ -478,7 +472,7 @@ switch (cmd) {
     ensureTray()
     cmdStop()
     break
-    case 'quit':
+  case 'quit':
     cmdStop()
     cmdQuit()
     break
