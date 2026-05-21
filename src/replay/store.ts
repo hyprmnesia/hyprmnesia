@@ -1,6 +1,5 @@
 import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
-import { defaultDbPath, expandHome } from '../util/paths'
 import { parseTimestamp, ReadStoreError } from '../mcp/read_store'
 import {
   chunkSource,
@@ -11,6 +10,7 @@ import {
   windowFromRow,
 } from '../mcp/read_store/format'
 import type { ChunkRow, SegmentRow, WindowPayload } from '../mcp/read_store/types'
+import { defaultDbPath, expandHome } from '../util/paths'
 
 export interface ReplayChunk {
   id: string
@@ -187,7 +187,8 @@ export class ReplayStore {
       this.db.run('PRAGMA busy_timeout = 2000')
       const version =
         this.db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version ?? 0
-      if (version < 2) throw new ReadStoreError(`replay requires index schema v2 or newer, got v${version}`)
+      if (version < 2)
+        throw new ReadStoreError(`replay requires index schema v2 or newer, got v${version}`)
     } catch (err) {
       if (err instanceof ReadStoreError) throw err
       throw new ReadStoreError(`failed to open replay database: ${String(err)}`)
@@ -313,10 +314,7 @@ export class ReplayStore {
   }
 }
 
-export function withReplayStore<T>(
-  dbPath: string | undefined,
-  fn: (store: ReplayStore) => T,
-): T {
+export function withReplayStore<T>(dbPath: string | undefined, fn: (store: ReplayStore) => T): T {
   const store = new ReplayStore(dbPath ?? defaultDbPath())
   try {
     return fn(store)

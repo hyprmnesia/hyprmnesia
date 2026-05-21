@@ -98,6 +98,14 @@
     "globals": ["Bun"]
   },
   "files": {
-    "includes": ["**", "!**/node_modules/**", "!**/dist/**", "!**/target/**", "!**/package.json"]
+    "includes": [
+      "**",
+      "!**/.claude/**",
+      "!**/artifacts/**",
+      "!**/node_modules/**",
+      "!**/dist/**",
+      "!**/target/**",
+      "!**/package.json"
+    ]
   }
 }

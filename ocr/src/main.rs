@@ -104,7 +104,9 @@ fn ocr(path: &Path) -> Result<OkResponse<'static>, String> {
 
     // try preferred user-language engine first; fall back to whichever is available
     let engine = OcrEngine::TryCreateFromUserProfileLanguages()
-        .or_else(|_| OcrEngine::TryCreateFromLanguage(&Language::CreateLanguage(&HSTRING::from("en-US"))?))
+        .or_else(|_| {
+            OcrEngine::TryCreateFromLanguage(&Language::CreateLanguage(&HSTRING::from("en-US"))?)
+        })
         .map_err(|e| format!("OcrEngine creation failed: {e}"))?;
 
     let result = engine

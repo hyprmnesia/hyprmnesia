@@ -1,13 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { buildActivityGroups } from './activity'
-import {
-  buildFtsQuery,
-  clampLimit,
-  clampOffset,
-  normalizeSource,
-  ReadStoreError,
-} from './filters'
+import { buildFtsQuery, clampLimit, clampOffset, normalizeSource, ReadStoreError } from './filters'
 import {
   chunkSource,
   excerpt,

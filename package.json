@@ -13,6 +13,12 @@
     "start": "bun run src/cli.ts start",
     "build": "bun run build.ts",
     "typecheck": "tsc --noEmit",
+    "changeset": "changeset",
+    "version-packages": "changeset version && bun run sync-version",
+    "sync-version": "bun run scripts/sync-version.ts",
+    "package": "bun run scripts/package.ts",
+    "checksums": "bun run scripts/checksums.ts",
+    "release-notes": "bun run scripts/release-notes.ts",
     "format": "biome format --write",
     "lint": "biome lint",
     "lint:fix": "biome lint --write",
@@ -31,6 +37,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
+    "@changesets/changelog-github": "^0.7.0",
+    "@changesets/cli": "^2.31.0",
     "@types/bun": "latest",
     "@types/react": "^19.2.14",
     "knip": "^6.14.1"

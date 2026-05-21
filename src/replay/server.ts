@@ -25,8 +25,7 @@ function noStoreHeaders(extra: Record<string, string> = {}): Record<string, stri
 function openUrl(url: string): void {
   const command =
     process.platform === 'win32' ? 'rundll32' : process.platform === 'darwin' ? 'open' : 'xdg-open'
-  const args =
-    process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url]
+  const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url]
   const child = spawn(command, args, {
     detached: true,
     stdio: 'ignore',
@@ -707,7 +706,8 @@ export async function startReplayServer(options: ReplayServerOptions): Promise<v
     port: 0,
     fetch(req) {
       const url = new URL(req.url)
-      if (!isAuthorized(url)) return new Response('forbidden', { status: 403, headers: noStoreHeaders() })
+      if (!isAuthorized(url))
+        return new Response('forbidden', { status: 403, headers: noStoreHeaders() })
       if (url.pathname === '/') {
         return new Response(REPLAY_HTML, {
           headers: noStoreHeaders({ 'Content-Type': 'text/html; charset=utf-8' }),

@@ -8,6 +8,7 @@ to confirm everything works.
 
 ## Contents
 - [Prerequisites](#prerequisites)
+- [Install from a GitHub Release](#install-from-a-github-release)
 - [Clone and install dependencies](#clone-and-install-dependencies)
 - [Platform-specific setup](#platform-specific-setup)
   - [macOS](#macos)
@@ -27,6 +28,38 @@ to confirm everything works.
 
 Platform-specific extras are listed in the [Platform-specific setup](#platform-specific-setup)
 section below — install those *before* the build step.
+
+## Install from a GitHub Release
+
+Alpha installers are published from GitHub Releases when a `vX.Y.Z` tag is
+pushed. They are unsigned for now, so Windows and macOS may show security
+warnings until signing/notarization is added.
+
+### Windows
+
+Download `hyprmnesia-<version>-windows-x64.msi` from the release and run it. The
+MSI installs Hyprmnesia for the current user under
+`%LocalAppData%\Programs\Hyprmnesia`, adds a Start Menu shortcut, and appends the
+install directory to the user `PATH`.
+
+### macOS
+
+Download `hyprmnesia-<version>-macos-<arch>.pkg` and install it. The package
+places files in `/usr/local/hyprmnesia` and creates `/usr/local/bin/hpm`.
+
+Because the package is unsigned in alpha, you may need to approve it through
+*System Settings -> Privacy & Security* after the first launch.
+
+### Linux (Debian/Ubuntu)
+
+Download `hyprmnesia-<version>-linux-x64.deb` and install it:
+
+```sh
+sudo apt install ./hyprmnesia-<version>-linux-x64.deb
+```
+
+The DEB installs into `/opt/hyprmnesia` and creates `/usr/bin/hpm`. A portable
+`.tar.gz` is also attached for non-Debian systems or manual testing.
 
 ## Clone and install dependencies
 

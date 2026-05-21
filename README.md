@@ -1,5 +1,8 @@
 # hyprmnesia
 
+[![CI](https://github.com/hyprmnesia/hyprmnesia/actions/workflows/ci.yml/badge.svg)](https://github.com/hyprmnesia/hyprmnesia/actions/workflows/ci.yml)
+[![Release](https://github.com/hyprmnesia/hyprmnesia/actions/workflows/release.yml/badge.svg)](https://github.com/hyprmnesia/hyprmnesia/actions/workflows/release.yml)
+
 > Personal memory of everything you've seen and heard, queryable via MCP.
 
 Hyprmnesia is a simple local-first desktop capture tool. It records screen snapshots,
@@ -20,6 +23,7 @@ microphone audio, system audio, and active-window context so an assistant like C
 - [TUI keybindings](#tui-keybindings)
 - [Flags](#flags)
 - [Configuration](#configuration)
+- [Release process](#release-process)
 - [Architecture](#architecture)
 - [Platform support](#platform-support)
 - [Roadmap](#roadmap)
@@ -311,6 +315,29 @@ but audio recorded before the model is ready is not transcribed.
 system audio is active, mic frames are only sent to ASR if the mic is clearly
 louder than the mixer. It reduces duplicated speaker text in the mic transcript;
 it is not full acoustic echo cancellation of the saved mic WAV.
+
+## Release Process
+
+Hyprmnesia uses Changesets for version bumps and changelog generation.
+
+```sh
+bun run changeset          # describe a user-visible change
+bun run version-packages   # locally apply pending changesets, if needed
+```
+
+On `main`, GitHub Actions opens a "Version Packages" PR when pending changesets
+exist. After that PR is merged, push a matching tag to publish installers:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds Windows, macOS, and Linux artifacts, then attaches
+MSI, PKG, DEB, portable archives, and `SHA256SUMS` to the GitHub Release.
+Installers are unsigned in alpha; code signing/notarization is tracked
+separately. See [docs/release.md](docs/release.md) for the full release
+checklist.
 
 ## Architecture
 
