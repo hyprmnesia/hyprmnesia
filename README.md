@@ -8,8 +8,23 @@ microphone audio, system audio, and active-window context so an assistant like C
 
 **Status: alpha.** Windows, macOS and Ubuntu with X11 are supported; other Linux and Wayland is being built in.
 
+## TODO
+
+Tracked in GitHub issues, roughly ordered by priority.
+
+
+- [ ] [#12](https://github.com/hyprmnesia/hyprmnesia/issues/12) — encryption at rest for captured blobs and the index DB (chunked AEAD + SQLCipher, keys in OS keychain)
+- [ ] [#6](https://github.com/hyprmnesia/hyprmnesia/issues/6) — protect read-only MCP access with a local auth token stored in the OS keychain
+- [ ] [#13](https://github.com/hyprmnesia/hyprmnesia/issues/13) — code signing and notarization for Windows, macOS, and Linux installers
+- [ ] [#7](https://github.com/hyprmnesia/hyprmnesia/issues/7) — Windows: keep system-audio capture working when the output is muted (WASAPI loopback / virtual sink)
+- [ ] [#8](https://github.com/hyprmnesia/hyprmnesia/issues/8) — Linux: screen capture on Wayland (GNOME, KDE, wlroots) via xdg-desktop-portal / PipeWire
+- [ ] [#10](https://github.com/hyprmnesia/hyprmnesia/issues/10) — quick toggle to switch screen, mic, or system recording on/off
+- [ ] [#4](https://github.com/hyprmnesia/hyprmnesia/issues/4) — configurable capture quality (resolution, format, audio bitrate)
+- [ ] [#11](https://github.com/hyprmnesia/hyprmnesia/issues/11) — semantic search over captures via local embeddings, hybrid with FTS5
+
 ## Contents
 
+- [TODO](#todo)
 - [What it captures](#what-it-captures)
 - [Quickstart](#quickstart)
 - [Usage](#usage)
