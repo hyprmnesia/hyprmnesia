@@ -182,6 +182,18 @@ function stringArg(args: Record<string, unknown>, key: string): string {
   return value
 }
 
+function rejectUnknownArgs(
+  args: Record<string, unknown>,
+  toolName: string,
+  allowed: readonly string[],
+): void {
+  const allowedSet = new Set(allowed)
+  const unknown = Object.keys(args).filter((key) => !allowedSet.has(key))
+  if (unknown.length > 0) {
+    throw new ReadStoreError(`${toolName} does not accept argument(s): ${unknown.join(', ')}`)
+  }
+}
+
 function validateRange(from: number | undefined, to: number | undefined): void {
   if (from !== undefined && to !== undefined && to < from) {
     throw new ReadStoreError('to must be greater than or equal to from')
@@ -276,6 +288,7 @@ function linesForRecentActivity(
 async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise<ToolResult> {
   const args = asRecord(rawArgs)
   if (name === 'search') {
+    rejectUnknownArgs(args, name, ['query', 'from', 'to', 'source', 'app', 'limit', 'offset'])
     const query = stringArg(args, 'query')
     const from = parseTimestamp(args['from'], 'from')
     const to = parseTimestamp(args['to'], 'to')
@@ -298,6 +311,7 @@ async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise
   }
 
   if (name === 'recent_activity') {
+    rejectUnknownArgs(args, name, ['minutes', 'to', 'sources', 'app', 'include_empty', 'limit'])
     const to = parseTimestamp(args['to'], 'to') ?? Date.now()
     const minutes = numberArg(args['minutes'], 5, 0.1, 1440)
     const from = to - Math.round(minutes * 60_000)
@@ -318,6 +332,15 @@ async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise
   }
 
   if (name === 'timeline') {
+    rejectUnknownArgs(args, name, [
+      'from',
+      'to',
+      'source',
+      'app',
+      'include_empty',
+      'limit',
+      'offset',
+    ])
     const from = parseTimestamp(args['from'], 'from')
     const to = parseTimestamp(args['to'], 'to')
     if (from === undefined || to === undefined) throw new ReadStoreError('from and to are required')
@@ -341,6 +364,7 @@ async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise
   }
 
   if (name === 'recall') {
+    rejectUnknownArgs(args, name, ['id', 'include_blob'])
     const id = stringArg(args, 'id')
     const result = withReadStore(dbPath, (store) =>
       store.recall(id, boolArg(args['include_blob'], false)),
@@ -353,6 +377,7 @@ async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise
   }
 
   if (name === 'get_transcript_segment') {
+    rejectUnknownArgs(args, name, ['id', 'include_chunk'])
     const id = stringArg(args, 'id')
     const result = withReadStore(dbPath, (store) =>
       store.getTranscriptSegment(id, boolArg(args['include_chunk'], true)),
