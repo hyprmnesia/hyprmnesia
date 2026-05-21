@@ -68,6 +68,7 @@ struct AppPaths {
 struct TrayMenu {
     status: MenuItem,
     open_tui: MenuItem,
+    open_replay: MenuItem,
     start: MenuItem,
     stop: MenuItem,
     open_logs: MenuItem,
@@ -174,6 +175,7 @@ fn build_menu() -> (Menu, TrayMenu) {
     let menu = Menu::new();
     let status = MenuItem::with_id(MenuId::new("status"), "Status: starting...", false, None);
     let open_tui = MenuItem::with_id(MenuId::new("open_tui"), "Open TUI", true, None);
+    let open_replay = MenuItem::with_id(MenuId::new("open_replay"), "Open Replay...", true, None);
     let start = MenuItem::with_id(MenuId::new("start"), "Start daemon", true, None);
     let stop = MenuItem::with_id(MenuId::new("stop"), "Stop daemon", false, None);
     let open_logs = MenuItem::with_id(MenuId::new("open_logs"), "Open log folder", true, None);
@@ -184,6 +186,7 @@ fn build_menu() -> (Menu, TrayMenu) {
         &status,
         &PredefinedMenuItem::separator(),
         &open_tui,
+        &open_replay,
         &PredefinedMenuItem::separator(),
         &start,
         &stop,
@@ -199,6 +202,7 @@ fn build_menu() -> (Menu, TrayMenu) {
         TrayMenu {
             status,
             open_tui,
+            open_replay,
             start,
             stop,
             open_logs,
@@ -217,6 +221,9 @@ fn handle_menu_event(
     match id.0.as_str() {
         "open_tui" => {
             let _ = open_tui(paths, last_status);
+        }
+        "open_replay" => {
+            let _ = open_replay(paths);
         }
         "start" => {
             // The tray supervises the CLI daemon; it never runs capture loops
@@ -269,6 +276,7 @@ fn refresh_menu(
         let _ = menu.start.set_enabled(!status.running);
         let _ = menu.stop.set_enabled(status.running);
         let _ = menu.open_tui.set_enabled(true);
+        let _ = menu.open_replay.set_enabled(true);
         let _ = menu.open_logs.set_enabled(true);
         let _ = menu.startup.set_text(if startup_enabled(&paths.hpm) {
             "Disable launch at login"
@@ -437,6 +445,12 @@ fn start_daemon(paths: &AppPaths) -> io::Result<()> {
 
 fn open_tui(paths: &AppPaths, _status: &DaemonStatus) -> io::Result<()> {
     open_terminal_for_hpm(&paths.hpm)
+}
+
+fn open_replay(paths: &AppPaths) -> io::Result<()> {
+    let mut command = base_command(&paths.hpm);
+    command.arg("replay");
+    command.spawn().map(|_| ())
 }
 
 #[cfg(target_os = "windows")]

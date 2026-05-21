@@ -97,6 +97,8 @@ usage:
   hpm quit               stop the daemon and quit the tray icon
   hpm status [--json]    print daemon status
   hpm mcp [flags]        run the read-only MCP server
+  hpm replay [--from <time> --to <time>]
+                         open an interactive local replay window
   hpm version            print version
 
 flags (for hpm/start):
@@ -117,6 +119,12 @@ flags (for hpm mcp):
   --transport <name>     MCP transport: stdio or http
   --bind <addr>          HTTP bind address (default: 127.0.0.1)
   --port <n>             HTTP port (default: 37373)
+
+flags (for hpm replay):
+  --from <epoch_ms|iso>  replay start time (optional deep-link)
+  --to <epoch_ms|iso>    replay end time (optional deep-link)
+  --db <path>            SQLite index path (default: ~/.hyprmnesia/index.db)
+  --no-open              print the local URL without opening the browser
 `)
 }
 
@@ -204,6 +212,34 @@ async function cmdMcp(flags: Record<string, string | boolean>) {
     bind: cfg.mcp.bind,
     port: cfg.mcp.port,
   })
+}
+
+/**
+ * Opens a temporary local browser replay for a captured time window.
+ *
+ * The replay server is read-only, tokenized, and foreground-bound so Ctrl-C can
+ * stop it cleanly. It does not start the capture daemon.
+ */
+async function cmdReplay(flags: Record<string, string | boolean>) {
+  const from = typeof flags['from'] === 'string' ? flags['from'] : undefined
+  const to = typeof flags['to'] === 'string' ? flags['to'] : undefined
+  if ((from === undefined) !== (to === undefined)) {
+    console.error('replay: --from and --to must be provided together')
+    process.exit(1)
+  }
+
+  const { startReplayServer } = await import('./replay/server')
+  try {
+    await startReplayServer({
+      dbPath: typeof flags['db'] === 'string' ? flags['db'] : undefined,
+      from,
+      to,
+      openBrowser: !flags['no-open'],
+    })
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err))
+    process.exit(1)
+  }
 }
 
 /**
@@ -485,6 +521,10 @@ switch (cmd) {
     break
   case 'mcp':
     await cmdMcp(flags)
+    break
+  case 'replay':
+    ensureTray()
+    await cmdReplay(flags)
     break
   case 'version':
     console.log('0.0.1')
