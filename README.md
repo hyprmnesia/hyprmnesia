@@ -14,6 +14,7 @@ microphone audio, system audio, and active-window context so an assistant like C
 - [Quickstart](#quickstart)
 - [Usage](#usage)
 - [MCP server](#mcp-server)
+- [Replay](#replay)
 - [Tray app](#tray-app)
 - [Daemon model](#daemon-model)
 - [TUI keybindings](#tui-keybindings)
@@ -22,6 +23,7 @@ microphone audio, system audio, and active-window context so an assistant like C
 - [Architecture](#architecture)
 - [Platform support](#platform-support)
 - [Roadmap](#roadmap)
+- [License](#license)
 
 ## What It Captures
 
@@ -67,6 +69,7 @@ bun run src/cli.ts quit       # quit the tray icon only
 bun run src/cli.ts status     # print daemon status
 bun run src/cli.ts status --json
 bun run src/cli.ts mcp        # run the read-only MCP stdio server
+bun run src/cli.ts replay     # open the local browser replay viewer
 ```
 
 After building:
@@ -80,6 +83,7 @@ bun run build                 # produces dist/hpm
 ./dist/hpm quit               # quit the tray icon only
 ./dist/hpm status --json
 ./dist/hpm mcp                # read-only MCP stdio server
+./dist/hpm replay             # open the local browser replay viewer
 ```
 
 `dist/hpm` is the user-facing entrypoint. Native helpers are built
@@ -144,6 +148,30 @@ an OCR-derived `url_candidate` marked low-confidence. `recall` only includes
 local `blob_path` metadata when `include_blob` is true; v1 does not stream
 screenshots or audio through MCP.
 
+## Replay
+
+`hpm replay` spins up a short-lived local HTTP server on `127.0.0.1` (random
+port, base64url token in the URL) and opens it in your default browser. The
+page is a small player that replays a captured time window: screenshots act as
+the video stream, transcripts render as subtitles, mic and system audio play
+as separate tracks you can toggle.
+
+Pick a range from the preset list (`last 5/15/30/60 min`, `today`, or `custom`)
+or pass it on the command line:
+
+```sh
+hpm replay
+hpm replay --from "2026-05-21T10:00:00" --to "2026-05-21T11:00:00"
+hpm replay --from 1747816800000 --to 1747820400000
+hpm replay --no-open                # print the URL only, no browser launch
+hpm replay --db ~/.hyprmnesia/index.db
+```
+
+The server is read-only, bound to localhost, and auto-shuts down after 15s of
+inactivity once the browser tab has been opened (Ctrl-C to stop earlier in
+`--no-open` mode). It can also be opened directly from the tray
+(`Open Replay...`).
+
 ## Tray App
 
 The tray app lives next to the system clock and supervises the capture daemon.
@@ -154,6 +182,7 @@ notifications.
 Tray menu:
 
 - `Open TUI`: opens a visible terminal and runs `hpm tui` (attached to the daemon)
+- `Open Replay...`: opens the local browser replay viewer
 - `Start daemon`: starts background captures
 - `Stop daemon`: stops background captures
 - `Open log folder`: opens `~/.hyprmnesia/`
@@ -322,4 +351,15 @@ See the [installation guide](docs/install.md) for the exact setup steps per OS.
 
 ## License
 
-TBD.
+Hyprmnesia is licensed under the **GNU Affero General Public License v3.0 or later** (AGPL-3.0-or-later).
+See [LICENSE](LICENSE) for the full text.
+
+In plain language:
+
+- You are free to use, modify and redistribute Hyprmnesia.
+- If you redistribute it (binary or source), your modifications must also be released under the AGPL.
+- If you run a modified version as a network service (SaaS, hosted dashboard, etc.), users of that service must be able to obtain the corresponding source code.
+
+This license was chosen deliberately: Hyprmnesia is a continuous capture tool
+(screen, audio, OCR, transcripts). The AGPL keeps any derivative — including
+hosted surveillance products — open and inspectable.
