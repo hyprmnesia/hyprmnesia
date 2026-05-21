@@ -1,0 +1,144 @@
+# Installation
+
+> Back to the [README](../README.md).
+
+This guide covers a full Hyprmnesia install from source on Windows, macOS, and
+Linux, including platform-specific dependencies, permissions, and a smoke test
+to confirm everything works.
+
+## Contents
+- [Prerequisites](#prerequisites)
+- [Clone and install dependencies](#clone-and-install-dependencies)
+- [Platform-specific setup](#platform-specific-setup)
+  - [macOS](#macos)
+  - [Windows](#windows)
+  - [Linux (Debian/Ubuntu)](#linux-debianubuntu)
+- [Build a release binary](#build-a-release-binary)
+- [Verify](#verify)
+- [Troubleshooting](#troubleshooting)
+
+## Prerequisites
+
+| Tool | Why |
+| --- | --- |
+| [Bun](https://bun.sh) | JS/TS runtime used by the CLI, TUI, and daemon |
+| Rust toolchain (`cargo`) | Builds the native helpers (`tray/`, `ocr/`, `asr/`, and `sck/` on macOS) |
+| Git | Cloning the repository |
+
+Platform-specific extras are listed in the [Platform-specific setup](#platform-specific-setup)
+section below — install those *before* the build step.
+
+## Clone and install dependencies
+
+```sh
+git clone https://github.com/hyprmnesia/hyprmnesia.git
+cd hyprmnesia
+bun install
+```
+
+`bun install` only fetches JS dependencies. The Rust helpers are compiled later
+during `bun run build` (or on first `dev` invocation that needs them).
+
+## Platform-specific setup
+
+### macOS
+
+**Requirements:** macOS 13 or later (ScreenCaptureKit).
+
+- Screen capture and system-audio capture are handled by the native helper
+  `hpm-sck`, built from `sck/`. **No BlackHole or loopback driver is required.**
+- On first run, macOS prompts for **Screen Recording** permission in
+  *System Settings → Privacy & Security*. Grant it to the terminal hosting
+  `hpm` (or to the bundled `hpm` itself once shipped as an app).
+- macOS also prompts for **Microphone** access the first time mic capture
+  starts; allow it for the same host.
+
+If the permission dialog never appears, see [Troubleshooting](#troubleshooting).
+
+### Windows
+
+**System-audio capture** requires the [Screen Capturer Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases)
+package, which registers the `virtual-audio-capturer` DirectShow device that
+Hyprmnesia records from.
+
+- Download and run the installer from the link above.
+- To skip system audio entirely (e.g. on a machine where the dshow device is
+  unavailable), launch Hyprmnesia with `--no-system-audio`.
+
+Microphone and screen capture work out of the box on Windows.
+
+### Linux (Debian/Ubuntu)
+
+Install the system packages used by the native tray, screen capture, and audio
+capture:
+
+```sh
+sudo apt install libxdo-dev imagemagick ffmpeg
+```
+
+- **`libxdo-dev`** — required to link the Rust tray helper (`tray/`).
+- **`imagemagick`** — provides the `import` command that `screenshot-desktop`
+  invokes under the hood.
+- **`ffmpeg`** — needed for mic and system-audio capture. The bundled
+  `ffmpeg-static` binary lacks PulseAudio / PipeWire support, so on Linux
+  Hyprmnesia uses the *system* `ffmpeg`. Debian/Ubuntu builds enable `libpulse`
+  by default; `pipewire-pulse` provides the PA socket on modern desktops.
+
+**Session requirement:** screen capture currently requires an **Xorg** session —
+`import` is X11-only. Wayland support is tracked in
+[#8](https://github.com/hyprmnesia/hyprmnesia/issues/8). To switch sessions, log
+out and pick "Ubuntu on Xorg" (or your distro's equivalent) at the login
+screen.
+
+## Build a release binary
+
+```sh
+bun run build         # produces dist/hpm
+./dist/hpm --help     # smoke test the binary
+```
+
+`dist/hpm` is the user-facing entry point. Native helpers are built
+automatically into `dist/native/` and should not be launched directly.
+
+## Verify
+
+Once built, confirm the daemon starts, runs, and stops cleanly:
+
+```sh
+./dist/hpm start          # launch tray + background daemon
+./dist/hpm status         # should report "running" with a PID
+./dist/hpm logs -n 20     # tail the most recent NDJSON events
+./dist/hpm stop           # stop the daemon when you're done
+```
+
+Captured data lives under `~/.hyprmnesia/`. See the [README](../README.md#daemon-model)
+for the list of files the daemon writes there.
+
+## Troubleshooting
+
+**macOS — `hpm-sck` exits immediately or no capture happens.**
+Re-check *System Settings → Privacy & Security → Screen Recording*. The
+permission must be granted to the host process that launched `hpm` (often your
+terminal app, e.g. Terminal.app, iTerm, Ghostty). Quit and relaunch the
+terminal after granting permission.
+
+**Windows — system audio is silent.**
+Confirm the `virtual-audio-capturer` device is registered:
+
+```sh
+ffmpeg -list_devices true -f dshow -i dummy
+```
+
+If it doesn't appear, re-run the Screen Capturer Recorder installer. As a
+workaround, launch Hyprmnesia with `--no-system-audio`.
+
+**Linux — screen capture fails on a fresh login.**
+You are most likely on a Wayland session. Log out and pick the Xorg variant of
+your desktop at the login screen, then try again.
+
+**Linux — Rust build fails with a missing `xdo.h`.**
+`libxdo-dev` is not installed. Run `sudo apt install libxdo-dev` and rebuild.
+
+**Linux — `ffmpeg` cannot find a PulseAudio source.**
+Make sure either PulseAudio or `pipewire-pulse` is running. `pactl info` should
+print a server name.
