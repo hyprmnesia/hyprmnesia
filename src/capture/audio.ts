@@ -30,11 +30,22 @@ export interface CaptureRunner {
   done: Promise<void>
 }
 
+interface AudioStreamDeps {
+  blobs: BlobStore
+  store: ChunkStore
+  transcription: TranscriptionQueue
+  events: EventBus
+  echo: EchoSuppressionRuntime
+  getWindow?: () => WindowContext | undefined
+}
+
 const SCR_INSTALL_URL =
   'https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases'
 const LEVEL_THROTTLE_MS = 100
 const ASR_FRAME_MS = 30
 const BYTES_PER_SAMPLE = 2
+
+const NOOP_RUNNER: CaptureRunner = { stop: () => {}, done: Promise.resolve() }
 
 interface AudioChunkState {
   id: string
@@ -44,6 +55,7 @@ interface AudioChunkState {
   window?: WindowContext
   parts: Buffer[]
   samples: number
+  inserted: boolean
 }
 
 interface EchoSuppressionRuntime {
@@ -99,6 +111,10 @@ function finiteLevel(value: number): number | undefined {
   return Number.isFinite(value) ? value : undefined
 }
 
+function peakOrFloor(value: number): number {
+  return Number.isFinite(value) ? value : -Infinity
+}
+
 function makeEchoSuppression(cfg: AudioCaptureConfig): EchoSuppressionRuntime {
   return {
     enabled: cfg.echo_suppression?.enabled ?? true,
@@ -141,18 +157,14 @@ interface AudioConsumer {
   finalize: () => Promise<void>
 }
 
-function makeAudioConsumer(args: {
-  source: AudioSource
-  device: string
-  sampleRate: number
-  chunkMs: number
-  blobs: BlobStore
-  store: ChunkStore
-  transcription: TranscriptionQueue
-  events: EventBus
-  echo: EchoSuppressionRuntime
-  getWindow?: () => WindowContext | undefined
-}): AudioConsumer {
+function makeAudioConsumer(
+  args: {
+    source: AudioSource
+    device: string
+    sampleRate: number
+    chunkMs: number
+  } & AudioStreamDeps,
+): AudioConsumer {
   const {
     source,
     device,
@@ -183,18 +195,26 @@ function makeAudioConsumer(args: {
     const kind = chunkKind(source)
     const blobPath = blobs.path(kind, id, 'wav', at)
     const window = getWindow?.()
-    current = { id, kind, startAt: at, blobPath, window, parts: [], samples: 0 }
+    current = { id, kind, startAt: at, blobPath, window, parts: [], samples: 0, inserted: false }
+    return current
+  }
+
+  // Defer the DB row until the chunk actually has audio. Avoids orphan rows
+  // when a stream stops between ensureChunk and the first sample arriving.
+  const insertChunkRow = (chunk: AudioChunkState) => {
+    if (chunk.inserted) return
+    chunk.inserted = true
     store.insert({
-      id,
-      kind,
-      at,
-      start_at: at,
-      end_at: at,
-      blob: blobPath,
+      id: chunk.id,
+      kind: chunk.kind,
+      at: chunk.startAt,
+      start_at: chunk.startAt,
+      end_at: chunk.startAt,
+      blob: chunk.blobPath,
       bytes: 0,
       text: '',
       capture_ms: 0,
-      window,
+      window: chunk.window,
       audio: {
         engine: 'pending',
         device,
@@ -202,7 +222,6 @@ function makeAudioConsumer(args: {
         chunk_ms: chunkMs,
       },
     })
-    return current
   }
 
   const flushAsrBoundary = () => {
@@ -214,7 +233,7 @@ function makeAudioConsumer(args: {
   }
 
   const finalizeChunk = async () => {
-    if (!current || current.samples === 0) {
+    if (!current || !current.inserted) {
       current = undefined
       return
     }
@@ -278,10 +297,12 @@ function makeAudioConsumer(args: {
       const takeBytes = Math.min(remainingBytes, pcm.length - offset)
       const part = pcm.subarray(offset, offset + takeBytes)
       const partAt = chunk.startAt + Math.round((chunk.samples / sampleRate) * 1000)
+      const newSamples = Math.floor(part.length / BYTES_PER_SAMPLE)
 
       chunk.parts.push(part)
-      chunk.samples += Math.floor(part.length / BYTES_PER_SAMPLE)
-      samplesSeen += Math.floor(part.length / BYTES_PER_SAMPLE)
+      chunk.samples += newSamples
+      samplesSeen += newSamples
+      if (newSamples > 0) insertChunkRow(chunk)
       feedAsr(chunk.id, part, partAt)
 
       const now = Date.now()
@@ -292,7 +313,7 @@ function makeAudioConsumer(args: {
           type: 'audio_level',
           source,
           at: now,
-          rms_db: Number.isFinite(levels.peak_db) ? levels.peak_db : -Infinity,
+          rms_db: peakOrFloor(levels.peak_db),
         })
       }
 
@@ -320,30 +341,31 @@ function makeAudioConsumer(args: {
   return { appendPcm, finalize }
 }
 
+function publishDisabled(events: EventBus, source: AudioSource): CaptureRunner {
+  events.publish({
+    type: 'log',
+    at: Date.now(),
+    level: 'info',
+    message: `${source} capture disabled`,
+  })
+  return NOOP_RUNNER
+}
+
 function startSckSystemStream(
   stream: AudioStreamConfig,
   sampleRate: number,
   sck: SckBus,
-  blobs: BlobStore,
-  store: ChunkStore,
-  transcription: TranscriptionQueue,
-  events: EventBus,
-  echo: EchoSuppressionRuntime,
-  getWindow?: () => WindowContext | undefined,
+  deps: AudioStreamDeps,
 ): CaptureRunner {
   const source: AudioSource = 'system'
-  if (!stream.enabled) {
-    events.publish({
-      type: 'log',
-      at: Date.now(),
-      level: 'info',
-      message: `${source} capture disabled`,
-    })
-    return { stop: () => {}, done: Promise.resolve() }
-  }
+  if (!stream.enabled) return publishDisabled(deps.events, source)
 
   let running = true
   let unsubscribe: (() => void) | undefined
+  let resolveStopped!: () => void
+  const stoppedSignal = new Promise<void>((resolve) => {
+    resolveStopped = resolve
+  })
 
   const done = (async () => {
     const consumer = makeAudioConsumer({
@@ -351,18 +373,13 @@ function startSckSystemStream(
       device: 'sck',
       sampleRate,
       chunkMs: stream.chunk_ms,
-      blobs,
-      store,
-      transcription,
-      events,
-      echo,
-      getWindow,
+      ...deps,
     })
 
     try {
       await sck.start()
     } catch (err) {
-      events.publish({
+      deps.events.publish({
         type: 'error',
         source,
         at: Date.now(),
@@ -373,7 +390,7 @@ function startSckSystemStream(
 
     if (!running) return
 
-    events.publish({
+    deps.events.publish({
       type: 'started',
       source,
       at: Date.now(),
@@ -385,7 +402,7 @@ function startSckSystemStream(
       appending = appending
         .then(() => consumer.appendPcm(event.pcm))
         .catch((err) => {
-          events.publish({
+          deps.events.publish({
             type: 'error',
             source,
             at: Date.now(),
@@ -394,27 +411,21 @@ function startSckSystemStream(
         })
     })
 
-    // Wait until stop() is called.
-    await new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (!running) {
-          clearInterval(interval)
-          resolve()
-        }
-      }, 100)
-    })
+    await stoppedSignal
 
     unsubscribe?.()
     unsubscribe = undefined
     await appending.catch(() => {})
     await consumer.finalize()
-    events.publish({ type: 'stopped', source, at: Date.now() })
+    deps.events.publish({ type: 'stopped', source, at: Date.now() })
   })()
 
   return {
     done,
     stop: () => {
+      if (!running) return
       running = false
+      resolveStopped()
     },
   }
 }
@@ -423,22 +434,9 @@ function startStream(
   source: AudioSource,
   stream: AudioStreamConfig,
   sampleRate: number,
-  blobs: BlobStore,
-  store: ChunkStore,
-  transcription: TranscriptionQueue,
-  events: EventBus,
-  echo: EchoSuppressionRuntime,
-  getWindow?: () => WindowContext | undefined,
+  deps: AudioStreamDeps,
 ): CaptureRunner {
-  if (!stream.enabled) {
-    events.publish({
-      type: 'log',
-      at: Date.now(),
-      level: 'info',
-      message: `${source} capture disabled`,
-    })
-    return { stop: () => {}, done: Promise.resolve() }
-  }
+  if (!stream.enabled) return publishDisabled(deps.events, source)
 
   let running = true
   let currentProc: { kill: () => void } | null = null
@@ -448,7 +446,7 @@ function startStream(
     try {
       device = await resolveDevice(source, stream.device)
     } catch (err) {
-      events.publish({ type: 'error', source, at: Date.now(), message: String(err) })
+      deps.events.publish({ type: 'error', source, at: Date.now(), message: String(err) })
       return
     }
 
@@ -476,7 +474,7 @@ function startStream(
         windowsHide: true,
       })
     } catch (err) {
-      events.publish({
+      deps.events.publish({
         type: 'error',
         source,
         at: Date.now(),
@@ -489,7 +487,7 @@ function startStream(
       proc.stderr instanceof ReadableStream ? new Response(proc.stderr).text() : Promise.resolve('')
     if (!(proc.stdout instanceof ReadableStream)) {
       proc.kill()
-      events.publish({
+      deps.events.publish({
         type: 'error',
         source,
         at: Date.now(),
@@ -498,7 +496,7 @@ function startStream(
       return
     }
 
-    events.publish({
+    deps.events.publish({
       type: 'started',
       source,
       at: Date.now(),
@@ -510,23 +508,20 @@ function startStream(
       device,
       sampleRate,
       chunkMs: stream.chunk_ms,
-      blobs,
-      store,
-      transcription,
-      events,
-      echo,
-      getWindow,
+      ...deps,
     })
 
     const reader = proc.stdout.getReader()
     try {
       while (running) {
-        const { done, value } = await reader.read()
-        if (done) break
+        const { done: readerDone, value } = await reader.read()
+        if (readerDone) break
         if (value?.length) await consumer.appendPcm(Buffer.from(value))
       }
     } catch (err) {
-      if (running) events.publish({ type: 'error', source, at: Date.now(), message: String(err) })
+      if (running) {
+        deps.events.publish({ type: 'error', source, at: Date.now(), message: String(err) })
+      }
     } finally {
       running = false
       currentProc = null
@@ -535,14 +530,14 @@ function startStream(
       const exit = await proc.exited.catch(() => undefined)
       const stderr = await stderrText.catch(() => '')
       if (exit !== 0 && stderr.trim()) {
-        events.publish({
+        deps.events.publish({
           type: 'error',
           source,
           at: Date.now(),
           message: `ffmpeg (${source}) exited ${exit}: ${stderr.trim()}`,
         })
       }
-      events.publish({ type: 'stopped', source, at: Date.now() })
+      deps.events.publish({ type: 'stopped', source, at: Date.now() })
     }
   })()
 
@@ -565,41 +560,12 @@ export function startAudioCapture({
   getWindow,
 }: AudioCaptureDeps): CaptureRunner {
   const echo = makeEchoSuppression(cfg)
-  const mic = startStream(
-    'mic',
-    cfg.mic,
-    cfg.sample_rate,
-    blobs,
-    store,
-    transcription,
-    events,
-    echo,
-    getWindow,
-  )
+  const streamDeps: AudioStreamDeps = { blobs, store, transcription, events, echo, getWindow }
+  const mic = startStream('mic', cfg.mic, cfg.sample_rate, streamDeps)
   const system =
     process.platform === 'darwin' && cfg.system.enabled && sck
-      ? startSckSystemStream(
-          cfg.system,
-          cfg.sample_rate,
-          sck,
-          blobs,
-          store,
-          transcription,
-          events,
-          echo,
-          getWindow,
-        )
-      : startStream(
-          'system',
-          cfg.system,
-          cfg.sample_rate,
-          blobs,
-          store,
-          transcription,
-          events,
-          echo,
-          getWindow,
-        )
+      ? startSckSystemStream(cfg.system, cfg.sample_rate, sck, streamDeps)
+      : startStream('system', cfg.system, cfg.sample_rate, streamDeps)
   return {
     done: Promise.allSettled([mic.done, system.done]).then(() => {}),
     stop: () => {
