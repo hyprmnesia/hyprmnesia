@@ -14,7 +14,6 @@ import { TesseractOcr } from './tesseract'
 export class AutoOcr implements OcrEngine {
   readonly name = 'auto'
   private chosen?: OcrEngine
-  private chosenName?: string
 
   async ready(): Promise<boolean> {
     if (this.chosen) return true
@@ -22,7 +21,6 @@ export class AutoOcr implements OcrEngine {
     for (const c of candidates) {
       if (await c.ready()) {
         this.chosen = c
-        this.chosenName = c.name
         return true
       }
     }
@@ -35,9 +33,5 @@ export class AutoOcr implements OcrEngine {
       if (!ok) throw new Error('no ocr engine available')
     }
     return this.chosen!.process(image)
-  }
-
-  resolvedName(): string | undefined {
-    return this.chosenName
   }
 }

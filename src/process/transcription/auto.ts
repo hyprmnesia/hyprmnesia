@@ -8,7 +8,6 @@ import { type ParakeetOptions, ParakeetTranscription } from './parakeet'
 export class AutoTranscription implements TranscriptionEngine {
   readonly name = 'auto'
   private chosen?: TranscriptionEngine
-  private chosenName?: string
 
   constructor(
     private parakeetOpts: ParakeetOptions = {},
@@ -20,7 +19,6 @@ export class AutoTranscription implements TranscriptionEngine {
     const parakeet = new ParakeetTranscription(this.parakeetOpts, this.events)
     if (await parakeet.ready()) {
       this.chosen = parakeet
-      this.chosenName = parakeet.name
       return true
     }
     return false
@@ -48,9 +46,5 @@ export class AutoTranscription implements TranscriptionEngine {
 
   async stop(): Promise<void> {
     await this.chosen?.stop()
-  }
-
-  resolvedName(): string | undefined {
-    return this.chosenName
   }
 }

@@ -30,10 +30,6 @@ export class TranscriptionQueue {
     this.engine.submitPcm(frame)
   }
 
-  pending(): number {
-    return 0
-  }
-
   async flush(source?: AudioSource): Promise<void> {
     await this.engine.flush(source)
   }

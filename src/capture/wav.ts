@@ -3,38 +3,6 @@ export interface WavLevels {
   peak_db: number
 }
 
-function _wavLevels(buf: Buffer): WavLevels {
-  if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF') {
-    return { rms_db: -Infinity, peak_db: -Infinity }
-  }
-
-  let offset = 12
-  while (offset + 8 <= buf.length) {
-    const chunkId = buf.toString('ascii', offset, offset + 4)
-    const chunkSize = buf.readUInt32LE(offset + 4)
-    offset += 8
-    if (chunkId === 'data') break
-    offset += chunkSize
-  }
-  if (offset >= buf.length) return { rms_db: -Infinity, peak_db: -Infinity }
-
-  const sampleCount = Math.floor((buf.length - offset) / 2)
-  if (sampleCount === 0) return { rms_db: -Infinity, peak_db: -Infinity }
-
-  let sumSquares = 0
-  let peak = 0
-  for (let i = offset; i + 1 < buf.length; i += 2) {
-    const s = buf.readInt16LE(i)
-    sumSquares += s * s
-    const abs = Math.abs(s)
-    if (abs > peak) peak = abs
-  }
-  const rms = Math.sqrt(sumSquares / sampleCount)
-  const rms_db = rms > 0 ? 20 * Math.log10(rms / 32768) : -Infinity
-  const peak_db = peak > 0 ? 20 * Math.log10(peak / 32768) : -Infinity
-  return { rms_db, peak_db }
-}
-
 export function pcm16Levels(buf: Buffer): WavLevels {
   const sampleCount = Math.floor(buf.length / 2)
   if (sampleCount === 0) return { rms_db: -Infinity, peak_db: -Infinity }
