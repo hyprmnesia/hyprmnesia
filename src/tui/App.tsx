@@ -1,7 +1,6 @@
-import { spawnSync } from 'node:child_process'
 import { Box, Text, useApp, useInput } from 'ink'
-import { useEffect, useMemo, useState } from 'react'
-import { type Config, ensureDefaultConfig, loadConfigForEditing, saveConfig } from '../config'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { type Config, ensureDefaultConfig, loadConfigForEditing } from '../config'
 import type { CaptureEvent, Source } from '../core/events'
 import type { Orchestrator, OrchestratorStatus } from '../core/orchestrator'
 import { selfCliArgs } from '../util/selfCli'
@@ -9,13 +8,8 @@ import { EventList } from './EventList'
 import { Footer } from './Footer'
 import { type AudioTranscriptState, LiveTranscript, type TranscriptLine } from './LiveTranscript'
 import { LogPanel } from './LogPanel'
-import {
-  getSettingValue,
-  type SettingField,
-  SettingsPanel,
-  setSettingValue,
-  settingsFields,
-} from './SettingsPanel'
+import { SettingsPanel } from './SettingsPanel'
+import { handleSettingsKey } from './settingsInput'
 import { StatusPanel } from './StatusPanel'
 
 const MAX_EVENTS = 10
@@ -36,7 +30,7 @@ const VISIBLE: ReadonlySet<CaptureEvent['type']> = new Set([
   'log',
 ])
 
-function pushBounded(arr: number[], v: number, max: number): number[] {
+function pushBounded<T>(arr: readonly T[], v: T, max: number): T[] {
   const next = [...arr, v]
   return next.length > max ? next.slice(next.length - max) : next
 }
@@ -46,65 +40,31 @@ function pushTranscript(
   source: 'mic' | 'system',
   line: TranscriptLine,
 ): AudioTranscriptState {
-  const next = [...state[source], line]
-  return {
-    ...state,
-    [source]:
-      next.length > MAX_TRANSCRIPT_LINES ? next.slice(next.length - MAX_TRANSCRIPT_LINES) : next,
-  }
+  return { ...state, [source]: pushBounded(state[source], line, MAX_TRANSCRIPT_LINES) }
 }
 
 function isAudioTranscriptSource(source: Source): source is 'mic' | 'system' {
   return source === 'mic' || source === 'system'
 }
 
-function restartDaemon(): boolean {
-  spawnSync(process.execPath, selfCliArgs('stop'), { stdio: 'ignore', windowsHide: true })
-  const started = spawnSync(process.execPath, selfCliArgs('_daemon'), {
-    stdio: 'ignore',
-    windowsHide: true,
-  })
-  return started.status === 0
+async function awaitChild(args: string[]): Promise<number> {
+  const proc = Bun.spawn([process.execPath, ...args], { stdout: 'ignore', stderr: 'ignore' })
+  return await proc.exited
 }
 
-function coerceEditedValue(field: SettingField, value: string): unknown {
-  if (field.kind === 'number') {
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed)) return undefined
-    const min = field.min ?? Number.NEGATIVE_INFINITY
-    const max = field.max ?? Number.POSITIVE_INFINITY
-    return Math.min(max, Math.max(min, parsed))
-  }
-  return value
-}
-
-function nextFieldValue(field: SettingField, current: unknown, direction = 1): unknown {
-  if (field.kind === 'bool') return !current
-  if (field.kind === 'number') {
-    const base = typeof current === 'number' ? current : Number(current) || 0
-    const min = field.min ?? Number.NEGATIVE_INFINITY
-    const max = field.max ?? Number.POSITIVE_INFINITY
-    return Math.min(max, Math.max(min, base + (field.step ?? 1) * direction))
-  }
-  if (field.kind === 'enum' && field.choices?.length) {
-    const index = Math.max(
-      0,
-      field.choices.findIndex((choice) => choice === current),
-    )
-    return field.choices[(index + direction + field.choices.length) % field.choices.length]
-  }
-  return current
+async function restartDaemon(): Promise<boolean> {
+  await awaitChild(selfCliArgs('stop'))
+  const code = await awaitChild(selfCliArgs('_daemon'))
+  return code === 0
 }
 
 export function App({ orch }: { orch: Orchestrator }) {
   const { exit } = useApp()
   const [status, setStatus] = useState<OrchestratorStatus>(() => orch.status())
-  const [events, setEvents] = useState<CaptureEvent[]>([])
   const [logEvents, setLogEvents] = useState<CaptureEvent[]>([])
   const [micLevels, setMicLevels] = useState<number[]>([])
   const [systemLevels, setSystemLevels] = useState<number[]>([])
   const [transcripts, setTranscripts] = useState<AudioTranscriptState>({ mic: [], system: [] })
-  const [, tick] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [logsOpen, setLogsOpen] = useState(false)
   const [settingsIndex, setSettingsIndex] = useState(0)
@@ -112,6 +72,10 @@ export function App({ orch }: { orch: Orchestrator }) {
   const [editingValue, setEditingValue] = useState<string | undefined>()
   const [settingsMessage, setSettingsMessage] = useState(() => `config: ${ensureDefaultConfig()}`)
   const [stopping, setStopping] = useState(false)
+  const stoppingRef = useRef(stopping)
+  stoppingRef.current = stopping
+
+  const events = useMemo(() => logEvents.slice(-MAX_EVENTS), [logEvents])
 
   useEffect(() => {
     return orch.events.subscribe((e) => {
@@ -125,7 +89,7 @@ export function App({ orch }: { orch: Orchestrator }) {
       }
       const nextStatus = orch.status()
       setStatus(nextStatus)
-      if (stopping && !nextStatus.running) setStopping(false)
+      if (stoppingRef.current && !nextStatus.running) setStopping(false)
       const transcribedText =
         e.type === 'transcribed' && typeof e.text === 'string' ? e.text.trim() : ''
       if (e.type === 'transcribed' && isAudioTranscriptSource(e.source) && transcribedText) {
@@ -140,29 +104,18 @@ export function App({ orch }: { orch: Orchestrator }) {
         )
       }
       if (VISIBLE.has(e.type)) {
-        setLogEvents((prev) => {
-          const next = [...prev, e]
-          return next.length > MAX_LOG_EVENTS ? next.slice(next.length - MAX_LOG_EVENTS) : next
-        })
-        setEvents((prev) => {
-          const next = [...prev, e]
-          return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next
-        })
+        setLogEvents((prev) => pushBounded(prev, e, MAX_LOG_EVENTS))
       }
     })
   }, [orch])
 
   useEffect(() => {
-    const id = setInterval(() => tick((t) => t + 1), 1000)
-    const statusId = setInterval(() => {
+    const id = setInterval(() => {
       const nextStatus = orch.status()
       setStatus(nextStatus)
-      if (stopping && !nextStatus.running) setStopping(false)
+      if (stoppingRef.current && !nextStatus.running) setStopping(false)
     }, 1000)
-    return () => {
-      clearInterval(id)
-      clearInterval(statusId)
-    }
+    return () => clearInterval(id)
   }, [orch])
 
   const actions = useMemo(() => {
@@ -177,14 +130,7 @@ export function App({ orch }: { orch: Orchestrator }) {
             level: 'info',
             message: 'stopping daemon; finalizing queued transcriptions',
           }
-          setLogEvents((prev) => {
-            const next = [...prev, stopEvent]
-            return next.length > MAX_LOG_EVENTS ? next.slice(next.length - MAX_LOG_EVENTS) : next
-          })
-          setEvents((prev) => {
-            const next: CaptureEvent[] = [...prev, stopEvent]
-            return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next
-          })
+          setLogEvents((prev) => pushBounded(prev, stopEvent, MAX_LOG_EVENTS))
           orch.stop().catch(() => setStopping(false))
         } else {
           orch.start().catch(() => {})
@@ -198,8 +144,9 @@ export function App({ orch }: { orch: Orchestrator }) {
         setSettings(loadConfigForEditing())
         setSettingsMessage(`reloaded ${ensureDefaultConfig()}`)
       },
-      applySettings: () => {
-        const ok = restartDaemon()
+      applySettings: async () => {
+        setSettingsMessage('restarting daemon…')
+        const ok = await restartDaemon()
         setStatus(orch.status())
         setSettingsMessage(
           ok ? 'daemon restarted with saved settings' : 'daemon restart failed; check logs',
@@ -214,63 +161,25 @@ export function App({ orch }: { orch: Orchestrator }) {
 
   useInput((input, key) => {
     if (settingsOpen) {
-      const fields = settingsFields(settings)
-      const field = fields[settingsIndex]
-      if (!field) return
-
-      if (key.ctrl && input === 'c') {
-        actions.exit()
-        return
-      }
-
-      const saveNext = (next: Config, message = 'saved config.yaml; restart daemon to apply') => {
-        setSettings(next)
-        saveConfig(next)
-        setSettingsMessage(message)
-      }
-
-      if (editingValue !== undefined) {
-        if (key.return) {
-          const nextValue = coerceEditedValue(field, editingValue)
-          if (nextValue !== undefined) saveNext(setSettingValue(settings, field.path, nextValue))
-          setEditingValue(undefined)
-        } else if (key.escape) {
-          setEditingValue(undefined)
-        } else if (key.backspace || key.delete) {
-          setEditingValue((value) => value?.slice(0, -1) ?? '')
-        } else if (key.ctrl && input === 'u') {
-          setEditingValue('')
-        } else if (input && !key.ctrl && !key.meta) {
-          setEditingValue((value) => `${value ?? ''}${input}`)
-        }
-        return
-      }
-
-      if (input === 'e') {
-        actions.exit()
-      } else if (key.escape || input === 'c') {
-        setSettingsOpen(false)
-      } else if (input === 'l') {
-        setSettingsOpen(false)
-        setLogsOpen(true)
-      } else if (key.upArrow) {
-        setSettingsIndex((i) => Math.max(0, i - 1))
-      } else if (key.downArrow) {
-        setSettingsIndex((i) => Math.min(fields.length - 1, i + 1))
-      } else if (key.leftArrow || key.rightArrow) {
-        const current = getSettingValue(settings, field.path)
-        const direction = key.leftArrow ? -1 : 1
-        const nextValue = nextFieldValue(field, current, direction)
-        saveNext(setSettingValue(settings, field.path, nextValue))
-      } else if (key.return || input === ' ') {
-        const current = getSettingValue(settings, field.path)
-        if (field.kind === 'text' || field.kind === 'number') setEditingValue(String(current ?? ''))
-        else saveNext(setSettingValue(settings, field.path, nextFieldValue(field, current, 1)))
-      } else if (input === 'a') {
-        actions.applySettings()
-      } else if (input === 'r') {
-        actions.reloadSettings()
-      }
+      handleSettingsKey(input, key, {
+        config: settings,
+        selected: settingsIndex,
+        setSelected: setSettingsIndex,
+        setConfig: setSettings,
+        setMessage: setSettingsMessage,
+        editingValue,
+        setEditingValue,
+        onApply: () => {
+          void actions.applySettings()
+        },
+        onReload: actions.reloadSettings,
+        onClose: () => setSettingsOpen(false),
+        onOpenLogs: () => {
+          setSettingsOpen(false)
+          setLogsOpen(true)
+        },
+        onExit: actions.exit,
+      })
       return
     }
 

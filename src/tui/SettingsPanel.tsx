@@ -248,6 +248,35 @@ export function settingsFields(config: Config): SettingField[] {
   ]
 }
 
+export function coerceEditedValue(field: SettingField, value: string): unknown {
+  if (field.kind === 'number') {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) return undefined
+    const min = field.min ?? Number.NEGATIVE_INFINITY
+    const max = field.max ?? Number.POSITIVE_INFINITY
+    return Math.min(max, Math.max(min, parsed))
+  }
+  return value
+}
+
+export function nextFieldValue(field: SettingField, current: unknown, direction = 1): unknown {
+  if (field.kind === 'bool') return !current
+  if (field.kind === 'number') {
+    const base = typeof current === 'number' ? current : Number(current) || 0
+    const min = field.min ?? Number.NEGATIVE_INFINITY
+    const max = field.max ?? Number.POSITIVE_INFINITY
+    return Math.min(max, Math.max(min, base + (field.step ?? 1) * direction))
+  }
+  if (field.kind === 'enum' && field.choices?.length) {
+    const index = Math.max(
+      0,
+      field.choices.findIndex((choice) => choice === current),
+    )
+    return field.choices[(index + direction + field.choices.length) % field.choices.length]
+  }
+  return current
+}
+
 function displayValue(value: unknown): string {
   if (typeof value === 'boolean') return value ? 'on' : 'off'
   if (value === undefined || value === null || value === '') return '(empty)'
