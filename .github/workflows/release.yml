@@ -29,6 +29,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Select Xcode 26 (macOS SDK with MTLSamplerDescriptor.lodBias)
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
