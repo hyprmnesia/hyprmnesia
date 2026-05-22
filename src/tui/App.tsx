@@ -9,8 +9,8 @@ import { Footer } from './Footer'
 import { type AudioTranscriptState, LiveTranscript, type TranscriptLine } from './LiveTranscript'
 import { LogPanel } from './LogPanel'
 import { SettingsPanel } from './SettingsPanel'
-import { handleSettingsKey } from './settingsInput'
 import { StatusPanel } from './StatusPanel'
+import { handleSettingsKey } from './settingsInput'
 
 const MAX_EVENTS = 10
 const MAX_LOG_EVENTS = 80

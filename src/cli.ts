@@ -19,6 +19,7 @@ import { subscribeLevelsFile, subscribeNdjsonStdout } from './core/logger'
 import { makeOrchestrator } from './core/orchestrator'
 import { requestTrayQuit } from './core/tray'
 import { log } from './log'
+import { VERSION } from './version'
 
 /**
  * Parses the small hand-rolled CLI flag format used by `hpm`.
@@ -151,7 +152,7 @@ async function cmdCapture(flags: Record<string, string | boolean>) {
     await orch.start()
   } catch (err) {
     log.error('failed to start orchestrator', { err: String(err) })
-    await orch.stop().catch(() => { })
+    await orch.stop().catch(() => {})
     process.exit(1)
   }
 
@@ -527,7 +528,7 @@ switch (cmd) {
     await cmdReplay(flags)
     break
   case 'version':
-    console.log('0.0.1')
+    console.log(VERSION)
     break
   case 'help':
   case '--help':

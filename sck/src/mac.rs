@@ -91,7 +91,10 @@ impl SCStreamOutputTrait for Handler {
             _ => Ok(()),
         };
         if let Err(err) = res {
-            emit(&self.out, json!({"type": "error", "at": now_ms(), "message": err.to_string()}));
+            emit(
+                &self.out,
+                json!({"type": "error", "at": now_ms(), "message": err.to_string()}),
+            );
         }
     }
 }
@@ -223,7 +226,10 @@ pub fn run() -> Result<()> {
         let line = match line {
             Ok(l) => l,
             Err(err) => {
-                emit(&out, json!({"type": "error", "at": now_ms(), "message": format!("stdin read: {err}")}));
+                emit(
+                    &out,
+                    json!({"type": "error", "at": now_ms(), "message": format!("stdin read: {err}")}),
+                );
                 break;
             }
         };
@@ -233,7 +239,10 @@ pub fn run() -> Result<()> {
         let req: Request = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(err) => {
-                emit(&out, json!({"type": "error", "at": now_ms(), "message": format!("bad request: {err}")}));
+                emit(
+                    &out,
+                    json!({"type": "error", "at": now_ms(), "message": format!("bad request: {err}")}),
+                );
                 continue;
             }
         };
@@ -241,29 +250,41 @@ pub fn run() -> Result<()> {
         match req {
             Request::Start(params) => {
                 if stream.is_some() {
-                    emit(&out, json!({"type": "log", "at": now_ms(), "level": "warn", "message": "already running"}));
+                    emit(
+                        &out,
+                        json!({"type": "log", "at": now_ms(), "level": "warn", "message": "already running"}),
+                    );
                     continue;
                 }
                 match start_capture(&out, &params) {
                     Ok(s) => {
-                        emit(&out, json!({
-                            "type": "started",
-                            "at": now_ms(),
-                            "sample_rate": params.sample_rate.unwrap_or(48_000),
-                            "frame_interval_ms": params.frame_interval_ms.unwrap_or(5_000),
-                        }));
+                        emit(
+                            &out,
+                            json!({
+                                "type": "started",
+                                "at": now_ms(),
+                                "sample_rate": params.sample_rate.unwrap_or(48_000),
+                                "frame_interval_ms": params.frame_interval_ms.unwrap_or(5_000),
+                            }),
+                        );
                         stream = Some(s);
                         started_params = Some(params);
                     }
                     Err(err) => {
-                        emit(&out, json!({"type": "error", "at": now_ms(), "message": format!("start failed: {err:#}")}));
+                        emit(
+                            &out,
+                            json!({"type": "error", "at": now_ms(), "message": format!("start failed: {err:#}")}),
+                        );
                     }
                 }
             }
             Request::Stop => {
                 if let Some(s) = stream.take() {
                     if let Err(err) = s.stop_capture() {
-                        emit(&out, json!({"type": "error", "at": now_ms(), "message": format!("stop failed: {err:?}")}));
+                        emit(
+                            &out,
+                            json!({"type": "error", "at": now_ms(), "message": format!("stop failed: {err:?}")}),
+                        );
                     }
                     started_params = None;
                     emit(&out, json!({"type": "stopped", "at": now_ms()}));

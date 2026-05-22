@@ -1,4 +1,5 @@
 import { defaultDbPath, expandHome } from '../util/paths'
+import { VERSION } from '../version'
 import { type JsonRpcId, type JsonRpcRequest, type JsonRpcResponse, StdioJsonRpc } from './protocol'
 import {
   clampLimit,
@@ -276,7 +277,9 @@ function linesForRecentActivity(
         group.audio.system
           ? `system:${group.audio.system.states.join('|')}/${group.audio.system.segment_count}`
           : '',
-        group.audio.mic ? `mic:${group.audio.mic.states.join('|')}/${group.audio.mic.segment_count}` : '',
+        group.audio.mic
+          ? `mic:${group.audio.mic.states.join('|')}/${group.audio.mic.segment_count}`
+          : '',
       ]
         .filter(Boolean)
         .join(' ')
@@ -410,7 +413,7 @@ function protocolResult(method: string, params: unknown): unknown {
       },
       serverInfo: {
         name: 'hyprmnesia',
-        version: '0.0.1',
+        version: VERSION,
       },
       instructions:
         'Hyprmnesia MCP is local and read-only. Use recent_activity for what-was-I-doing questions, search for text lookup, timeline for exact time windows, recall for chunk details, and get_transcript_segment for precise transcript segments. Results include UTC and local timestamps; use local_* timestamps when answering the user.',
