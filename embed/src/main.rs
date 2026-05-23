@@ -47,7 +47,6 @@ fn main() -> Result<()> {
     let out: SharedOut = Arc::new(Mutex::new(io::stdout()));
     let mut model: Option<Model> = None;
     let mut model_name = DEFAULT_MODEL.to_string();
-    let mut dim = DEFAULT_DIM;
 
     for line in io::stdin().lock().lines() {
         let line = line?;
@@ -71,7 +70,7 @@ fn main() -> Result<()> {
                 dim: requested_dim,
             } => {
                 model_name = name.unwrap_or_else(|| DEFAULT_MODEL.to_string());
-                dim = requested_dim.unwrap_or(DEFAULT_DIM);
+                let dim = requested_dim.unwrap_or(DEFAULT_DIM);
                 emit(
                     &out,
                     json!({ "type": "status", "status": "loading", "engine": engine_name(&model_name), "message": "loading embedding model" }),
@@ -195,15 +194,15 @@ fn embed(model: &mut Model, kind: &str, text: &str) -> Result<Vec<f32>> {
             "input_ids" => id_tensor,
             "attention_mask" => mask_tensor,
             "token_type_ids" => tt_tensor,
-        ]?)?
+        ])?
     } else {
         model.session.run(ort::inputs![
             "input_ids" => id_tensor,
             "attention_mask" => mask_tensor,
-        ]?)?
+        ])?
     };
 
-    let (shape, data) = outputs[0].try_extract_raw_tensor::<f32>()?;
+    let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
     // last_hidden_state: [1, seq, hidden]
     let hidden = *shape.last().context("empty output shape")? as usize;
     if hidden != model.dim {
