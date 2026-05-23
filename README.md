@@ -19,7 +19,7 @@ Tracked in GitHub issues, roughly ordered by priority.
 - [ ] [#12](https://github.com/hyprmnesia/hyprmnesia/issues/12) — encryption at rest for captured blobs and the index DB (chunked AEAD + SQLCipher, keys in OS keychain)
 - [ ] [#6](https://github.com/hyprmnesia/hyprmnesia/issues/6) — protect read-only MCP access with a local auth token stored in the OS keychain
 - [ ] [#13](https://github.com/hyprmnesia/hyprmnesia/issues/13) — code signing and notarization for Windows, macOS, and Linux installers
-- [ ] [#7](https://github.com/hyprmnesia/hyprmnesia/issues/7) — Windows: keep system-audio capture working when the output is muted (WASAPI loopback / virtual sink)
+- [x] [#7](https://github.com/hyprmnesia/hyprmnesia/issues/7) — Windows: keep system-audio capture working when the output is muted (WASAPI loopback via `hpm-wasapi`, with DirectShow fallback)
 - [ ] [#8](https://github.com/hyprmnesia/hyprmnesia/issues/8) — Linux: screen capture on Wayland (GNOME, KDE, wlroots) via xdg-desktop-portal / PipeWire
 - [ ] [#10](https://github.com/hyprmnesia/hyprmnesia/issues/10) — quick toggle to switch screen, mic, or system recording on/off
 - [ ] [#4](https://github.com/hyprmnesia/hyprmnesia/issues/4) — configurable capture quality (resolution, format, audio bitrate)
@@ -370,7 +370,7 @@ hpm
     |-- hpm _capture
     |-- Orchestrator -> EventBus -> captures
         |-- screen (screenshot-desktop; hpm-sck on macOS)
-        |-- audio  (ffmpeg mic; hpm-sck system audio on macOS)
+        |-- audio  (ffmpeg mic; hpm-sck system audio on macOS; hpm-wasapi loopback on Windows)
         |          -> PCM stream -> hpm-asr Parakeet worker
         |-- active window
         `-- blob store / index
@@ -386,7 +386,7 @@ logs.
 | -------------- | -------------------------------------- | -------------------------------------- | ----------------------------- |
 | Screen capture | OK                                     | OK (ScreenCaptureKit, macOS 13+)       | OK (X11), Wayland TBD         |
 | Mic            | OK (dshow)                             | OK (avfoundation)                      | OK (pulse)                    |
-| System audio   | needs Screen Capturer Recorder         | OK (ScreenCaptureKit, no driver)       | `@DEFAULT_MONITOR@` via pulse |
+| System audio   | OK (WASAPI loopback, survives mute; dshow fallback) | OK (ScreenCaptureKit, no driver)       | `@DEFAULT_MONITOR@` via pulse |
 | Window context | OK                                     | OK + URL                               | OK on X11, none on Wayland    |
 
 See the [installation guide](docs/install.md) for the exact setup steps per OS.

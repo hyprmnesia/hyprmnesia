@@ -90,13 +90,31 @@ If the permission dialog never appears, see [Troubleshooting](#troubleshooting).
 
 ### Windows
 
-**System-audio capture** requires the [Screen Capturer Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases)
-package, which registers the `virtual-audio-capturer` DirectShow device that
-Hyprmnesia records from.
+**System-audio capture** has two backends, selected by
+`capture.audio.system.backend` in the config (or the "System backend" row in the
+TUI settings):
 
-- Download and run the installer from the link above.
-- To skip system audio entirely (e.g. on a machine where the dshow device is
-  unavailable), launch Hyprmnesia with `--no-system-audio`.
+- **`wasapi`** (preferred) — a bundled native helper (`hpm-wasapi`) captures the
+  render endpoint via WASAPI loopback. It taps the engine mix, so it keeps
+  capturing **even when Windows output is muted or its volume is 0** — the common
+  case for a memory app where you want to silence your speakers but still
+  transcribe. No external driver is required; the helper ships in `dist/native/`.
+- **`dshow`** (compatibility fallback) — records the `virtual-audio-capturer`
+  DirectShow device from the
+  [Screen Capturer Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases)
+  package. This device follows the audible output, so **muting Windows silences
+  the capture**.
+- **`auto`** (default) — uses `wasapi` when the helper is present, otherwise
+  falls back to `dshow` (and logs a warning that capture will follow mute).
+
+The selected backend and device are recorded in the daemon log's `started` event
+so you can confirm which path is active.
+
+- To use `dshow`, install Screen Capturer Recorder from the link above.
+- To skip system audio entirely, launch Hyprmnesia with `--no-system-audio`.
+- If WASAPI loopback still follows mute on your hardware/driver stack, route the
+  app's audio into a virtual audio cable/sink and capture that device via
+  `backend: dshow` with an explicit `device` name.
 
 Microphone and screen capture work out of the box on Windows.
 
@@ -156,14 +174,24 @@ terminal app, e.g. Terminal.app, iTerm, Ghostty). Quit and relaunch the
 terminal after granting permission.
 
 **Windows — system audio is silent.**
-Confirm the `virtual-audio-capturer` device is registered:
+First check the daemon log's `started` event for the `system` source to see which
+backend is active.
 
-```sh
-ffmpeg -list_devices true -f dshow -i dummy
-```
+- If `backend: "wasapi"` and audio is still silent, the helper may not be
+  capturing — confirm `dist/native/hpm-wasapi.exe` exists (built by
+  `bun run build`) and check the log for an `hpm-wasapi ... exited` error.
+- If `backend: "dshow"`, capture follows the Windows output: unmute the output,
+  or switch `capture.audio.system.backend` to `wasapi`. Confirm the dshow device
+  is registered with:
 
-If it doesn't appear, re-run the Screen Capturer Recorder installer. As a
-workaround, launch Hyprmnesia with `--no-system-audio`.
+  ```sh
+  ffmpeg -list_devices true -f dshow -i dummy
+  ```
+
+  If `virtual-audio-capturer` doesn't appear, re-run the Screen Capturer Recorder
+  installer.
+
+As a last resort, launch Hyprmnesia with `--no-system-audio`.
 
 **Linux — screen capture fails on a fresh login.**
 You are most likely on a Wayland session. Log out and pick the Xorg variant of

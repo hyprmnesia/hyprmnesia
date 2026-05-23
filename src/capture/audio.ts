@@ -7,6 +7,8 @@ import type { ChunkStore } from '../store/db'
 import {
   buildMicInputArgs,
   buildSystemAudioInputArgs,
+  buildWasapiArgs,
+  findWasapiBinary,
   getFfmpegPath,
   listAvfoundationAudioDevices,
   listDshowAudioDevices,
@@ -105,6 +107,88 @@ async function resolveDevice(source: AudioSource, configured: string): Promise<s
 
 function inputArgsFor(source: AudioSource, device: string): string[] {
   return source === 'mic' ? buildMicInputArgs(device) : buildSystemAudioInputArgs(device)
+}
+
+function ffmpegPcmArgs(inputArgs: string[], sampleRate: number): string[] {
+  return [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    ...inputArgs,
+    '-vn',
+    '-f',
+    's16le',
+    '-acodec',
+    'pcm_s16le',
+    '-ar',
+    String(sampleRate),
+    '-ac',
+    '1',
+    'pipe:1',
+  ]
+}
+
+interface ResolvedPcmSource {
+  bin: string
+  args: string[]
+  device: string
+  label: 'ffmpeg' | 'hpm-wasapi'
+  backend?: string
+  warn?: string
+}
+
+// Decide which process produces the PCM stream for a stream config. Both
+// ffmpeg and hpm-wasapi emit s16le mono at `sampleRate` on stdout, so the
+// downstream consumer is identical. Only the Windows *system* stream has a
+// backend choice; everything else stays on ffmpeg.
+async function resolvePcmSource(
+  source: AudioSource,
+  stream: AudioStreamConfig,
+  sampleRate: number,
+): Promise<ResolvedPcmSource> {
+  if (process.platform === 'win32' && source === 'system') {
+    const backend = stream.backend ?? 'auto'
+    if (backend !== 'dshow') {
+      const bin = findWasapiBinary()
+      if (bin) {
+        return {
+          bin,
+          args: buildWasapiArgs(stream.device, sampleRate),
+          device: stream.device === 'default' ? 'loopback (default render)' : stream.device,
+          label: 'hpm-wasapi',
+          backend: 'wasapi',
+        }
+      }
+      if (backend === 'wasapi') {
+        throw new Error(
+          'system audio backend=wasapi but the hpm-wasapi helper was not found - ' +
+            'build it with `bun run build` (or `cargo build --release --workspace`), ' +
+            'switch backend to dshow, or pass --no-system-audio',
+        )
+      }
+      // auto + helper missing: fall through to dshow with a warning.
+    }
+    const device = await resolveDevice(source, stream.device)
+    return {
+      bin: getFfmpegPath(),
+      args: ffmpegPcmArgs(inputArgsFor(source, device), sampleRate),
+      device,
+      label: 'ffmpeg',
+      backend: 'dshow',
+      warn:
+        'system audio using DirectShow (virtual-audio-capturer): capture follows ' +
+        'Windows output mute/volume, so muting the speakers silences transcription. ' +
+        'Build the hpm-wasapi helper for mute-independent loopback capture.',
+    }
+  }
+
+  const device = await resolveDevice(source, stream.device)
+  return {
+    bin: getFfmpegPath(),
+    args: ffmpegPcmArgs(inputArgsFor(source, device), sampleRate),
+    device,
+    label: 'ffmpeg',
+  }
 }
 
 function finiteLevel(value: number): number | undefined {
@@ -442,33 +526,21 @@ function startStream(
   let currentProc: { kill: () => void } | null = null
 
   const done = (async () => {
-    let device: string
+    let resolved: ResolvedPcmSource
     try {
-      device = await resolveDevice(source, stream.device)
+      resolved = await resolvePcmSource(source, stream, sampleRate)
     } catch (err) {
       deps.events.publish({ type: 'error', source, at: Date.now(), message: String(err) })
       return
     }
+    const { bin, args, device, label } = resolved
+    if (resolved.warn) {
+      deps.events.publish({ type: 'log', at: Date.now(), level: 'warn', message: resolved.warn })
+    }
 
-    const args = [
-      '-hide_banner',
-      '-loglevel',
-      'error',
-      ...inputArgsFor(source, device),
-      '-vn',
-      '-f',
-      's16le',
-      '-acodec',
-      'pcm_s16le',
-      '-ar',
-      String(sampleRate),
-      '-ac',
-      '1',
-      'pipe:1',
-    ]
     let proc: ReturnType<typeof Bun.spawn>
     try {
-      proc = Bun.spawn([getFfmpegPath(), ...args], {
+      proc = Bun.spawn([bin, ...args], {
         stdout: 'pipe',
         stderr: 'pipe',
         windowsHide: true,
@@ -478,7 +550,7 @@ function startStream(
         type: 'error',
         source,
         at: Date.now(),
-        message: `failed to spawn ffmpeg (${source}): ${String(err)}`,
+        message: `failed to spawn ${label} (${source}): ${String(err)}`,
       })
       return
     }
@@ -491,7 +563,7 @@ function startStream(
         type: 'error',
         source,
         at: Date.now(),
-        message: `ffmpeg (${source}) did not expose a readable PCM stdout stream`,
+        message: `${label} (${source}) did not expose a readable PCM stdout stream`,
       })
       return
     }
@@ -500,7 +572,13 @@ function startStream(
       type: 'started',
       source,
       at: Date.now(),
-      meta: { mode: 'pcm', chunk_ms: stream.chunk_ms, device, sample_rate: sampleRate },
+      meta: {
+        mode: 'pcm',
+        chunk_ms: stream.chunk_ms,
+        device,
+        sample_rate: sampleRate,
+        ...(resolved.backend ? { backend: resolved.backend } : {}),
+      },
     })
 
     const consumer = makeAudioConsumer({
@@ -534,7 +612,7 @@ function startStream(
           type: 'error',
           source,
           at: Date.now(),
-          message: `ffmpeg (${source}) exited ${exit}: ${stderr.trim()}`,
+          message: `${label} (${source}) exited ${exit}: ${stderr.trim()}`,
         })
       }
       deps.events.publish({ type: 'stopped', source, at: Date.now() })

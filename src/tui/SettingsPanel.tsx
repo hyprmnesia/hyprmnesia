@@ -100,6 +100,13 @@ export function settingsFields(config: Config): SettingField[] {
       hint: 'device name or default',
     },
     {
+      label: 'System backend',
+      path: ['capture', 'audio', 'system', 'backend'],
+      kind: 'enum',
+      choices: ['auto', 'wasapi', 'dshow'],
+      hint: 'windows: wasapi survives mute',
+    },
+    {
       label: 'System chunk',
       path: ['capture', 'audio', 'system', 'chunk_ms'],
       kind: 'number',
