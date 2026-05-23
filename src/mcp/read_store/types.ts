@@ -1,5 +1,7 @@
 export type SourceFilter = 'screen' | 'mic' | 'system'
 
+export type SearchMode = 'lexical' | 'semantic' | 'hybrid'
+
 export type AudioState =
   | 'recording'
   | 'transcribed'
@@ -18,6 +20,15 @@ export interface QueryFilters extends TimeRange {
   limit?: number
   offset?: number
   includeEmpty?: boolean
+  mode?: SearchMode
+  // Pre-computed query embedding (little-endian float32). Supplied by the MCP
+  // server when semantic/hybrid search is requested and the embedder is ready.
+  queryVector?: Float32Array
+}
+
+export interface SearchVecRow {
+  id: string
+  distance: number
 }
 
 export interface RecentActivityFilters {

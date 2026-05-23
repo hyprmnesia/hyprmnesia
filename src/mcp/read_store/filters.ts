@@ -1,4 +1,4 @@
-import type { SourceFilter } from './types'
+import type { SearchMode, SourceFilter } from './types'
 
 export class ReadStoreError extends Error {
   constructor(message: string) {
@@ -54,6 +54,12 @@ export function normalizeSources(value: unknown): SourceFilter[] {
     if (source && !out.includes(source)) out.push(source)
   }
   return out.length > 0 ? out : ['screen', 'mic', 'system']
+}
+
+export function normalizeMode(value: unknown): SearchMode {
+  if (value === undefined || value === null || value === '') return 'hybrid'
+  if (value === 'lexical' || value === 'semantic' || value === 'hybrid') return value
+  throw new ReadStoreError('mode must be one of: lexical, semantic, hybrid')
 }
 
 export function buildFtsQuery(query: unknown): string {

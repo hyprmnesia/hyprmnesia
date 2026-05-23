@@ -58,6 +58,13 @@ export type CaptureEvent =
       transcribe_ms: number
       engine: string
     }
+  | {
+      type: 'embedding_status'
+      at: number
+      status: 'starting' | 'downloading' | 'loading' | 'ready' | 'error' | 'stopped'
+      engine: string
+      message?: string
+    }
   | { type: 'error'; source: Source; at: number; message: string }
   | { type: 'log'; at: number; level: 'info' | 'warn' | 'error'; message: string; extra?: unknown }
 

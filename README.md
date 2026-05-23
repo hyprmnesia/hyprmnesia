@@ -310,6 +310,13 @@ processing:
         max_segment_ms: 6000
         silence_ms: 700
         rms_gate: 0.003
+  embeddings:
+    engine: local
+    options:
+      model: multilingual-e5-small
+      dim: 384
+      batch_size: 16
+      sources: [screen, mic, system]
 storage:
   path: ~/.hyprmnesia/data
 mcp:
@@ -325,6 +332,16 @@ normal runtime path.
 Parakeet model: `parakeet-tdt-0.6b-v3`. The ASR helper auto-downloads the model
 to the Hugging Face cache on first use; capture continues while it is loading,
 but audio recorded before the model is ready is not transcribed.
+
+Embedding engines: `local`, `noop`. When `local`, the `hpm-embed` helper computes
+sentence embeddings for OCR text and transcript segments locally (model
+auto-downloaded to the Hugging Face cache) and stores them via the `sqlite-vec`
+extension alongside the FTS5 index. The MCP `search` tool then accepts a `mode`
+argument — `lexical`, `semantic`, or `hybrid` (default). Hybrid fuses BM25 and
+vector similarity with Reciprocal Rank Fusion; search transparently falls back to
+lexical FTS5 when the embedding worker or vector index is unavailable. `sources`
+selects which capture kinds are embedded (`screen` = OCR text, `mic`/`system` =
+transcript segments).
 
 `capture.audio.echo_suppression` is a transcript guard for speaker bleed: when
 system audio is active, mic frames are only sent to ASR if the mic is clearly
