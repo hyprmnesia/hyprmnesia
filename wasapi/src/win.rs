@@ -138,7 +138,13 @@ fn to_i16(sample: f32) -> i16 {
 }
 
 // Decode one interleaved frame block (bytes) into mono f32 samples.
-fn decode_mono(bytes: &[u8], channels: usize, bytes_per_sample: usize, is_float: bool, out: &mut Vec<f32>) {
+fn decode_mono(
+    bytes: &[u8],
+    channels: usize,
+    bytes_per_sample: usize,
+    is_float: bool,
+    out: &mut Vec<f32>,
+) {
     let frame_bytes = channels * bytes_per_sample;
     if frame_bytes == 0 {
         return;
