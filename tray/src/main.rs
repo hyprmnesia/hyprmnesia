@@ -563,11 +563,17 @@ fn resolve_paths() -> io::Result<AppPaths> {
 fn hpm_candidates(tray_dir: &Path) -> Vec<PathBuf> {
     let hpm = executable_name("hpm");
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    vec![
-        tray_dir.join(&hpm),
-        cwd.join("dist").join(&hpm),
-        cwd.join(&hpm),
-    ]
+    let mut candidates = vec![tray_dir.join(&hpm)];
+    // Packaged installs place the tray in `<install>/native/` and the CLI in
+    // `<install>/hpm`, so the sibling-of-parent path is the only candidate that
+    // resolves at Windows boot, where the Run key launches the tray with the
+    // working directory set to system32 rather than the install dir.
+    if let Some(parent) = tray_dir.parent() {
+        candidates.push(parent.join(&hpm));
+    }
+    candidates.push(cwd.join("dist").join(&hpm));
+    candidates.push(cwd.join(&hpm));
+    candidates
 }
 
 fn executable_name(base: &str) -> String {
@@ -781,4 +787,19 @@ fn xml_escape(value: &str) -> String {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidates_include_parent_for_packaged_layout() {
+        // Packaged installs put the tray in `<install>/native/` and the CLI in
+        // `<install>/hpm`; without the parent candidate the tray cannot find hpm
+        // when launched at boot with an unrelated working directory.
+        let tray_dir = Path::new("/opt/hyprmnesia/native");
+        let expected = tray_dir.parent().unwrap().join(executable_name("hpm"));
+        assert!(hpm_candidates(tray_dir).contains(&expected));
+    }
 }
