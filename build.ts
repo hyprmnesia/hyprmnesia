@@ -55,6 +55,7 @@ const NATIVE_BINS: readonly string[] = [
   'hpm-ocr',
   'hpm-asr',
   ...(process.platform === 'darwin' ? ['hpm-sck'] : []),
+  ...(process.platform === 'linux' ? ['hpm-wlcap'] : []),
 ]
 const NATIVE_DEST_DIR = resolve('./dist/native')
 

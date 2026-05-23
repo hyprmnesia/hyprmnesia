@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tray", "ocr", "asr", "sck"]
+members = ["tray", "ocr", "asr", "sck", "wlcap"]
 
 [profile.release]
 opt-level = 3
