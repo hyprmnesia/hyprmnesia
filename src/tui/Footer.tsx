@@ -12,7 +12,7 @@ export function Footer({
   stopping: boolean
 }) {
   return (
-    <Box marginTop={1} paddingX={1}>
+    <Box flexDirection="column" marginTop={1} paddingX={1}>
       <Text>
         <Text color="cyan">[x]</Text>
         <Text dimColor>{stopping ? ' stopping  ' : running ? ' stop  ' : ' start  '}</Text>
@@ -24,6 +24,14 @@ export function Footer({
         <Text dimColor>{logsOpen ? ' close logs  ' : ' logs  '}</Text>
         <Text color="cyan">[e]</Text>
         <Text dimColor> exit</Text>
+      </Text>
+      <Text>
+        <Text color="cyan">[s]</Text>
+        <Text dimColor> screen </Text>
+        <Text color="cyan">[m]</Text>
+        <Text dimColor> mic </Text>
+        <Text color="cyan">[y]</Text>
+        <Text dimColor> system toggle capture on/off</Text>
       </Text>
     </Box>
   )
