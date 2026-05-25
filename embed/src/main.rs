@@ -11,7 +11,7 @@ use std::{
     io::{self, BufRead, Write},
     sync::{Arc, Mutex},
 };
-use tokenizers::Tokenizer;
+use tokenizers::{Tokenizer, TruncationParams};
 
 const DEFAULT_MODEL: &str = "multilingual-e5-small";
 const DEFAULT_DIM: usize = 384;
@@ -145,8 +145,17 @@ fn load_model(out: &SharedOut, name: &str, dim: usize) -> Result<Model> {
         .get("onnx/model.onnx")
         .context("download onnx/model.onnx")?;
 
-    let tokenizer =
+    let mut tokenizer =
         Tokenizer::from_file(&tokenizer_path).map_err(|err| anyhow!(err.to_string()))?;
+    // Cap sequences at the model's position-embedding table. Without this, a
+    // long passage (e.g. a multi-KB transcript) overflows and ONNX trips on the
+    // Add node in the embedding layer.
+    tokenizer
+        .with_truncation(Some(TruncationParams {
+            max_length: max_seq_len(name),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow!(err.to_string()))?;
     let session = ort::session::Session::builder()
         .context("session builder")?
         .commit_from_file(&model_path)
@@ -246,6 +255,13 @@ fn hf_repo(model: &str) -> &str {
         "bge-small-en-v1.5" => "Xenova/bge-small-en-v1.5",
         "all-MiniLM-L6-v2" => "Xenova/all-MiniLM-L6-v2",
         other => other,
+    }
+}
+
+fn max_seq_len(model: &str) -> usize {
+    match model {
+        "all-MiniLM-L6-v2" => 256,
+        _ => 512,
     }
 }
 

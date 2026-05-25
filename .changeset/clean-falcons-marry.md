@@ -7,3 +7,4 @@ Fixes from the review of #20.
 - wlcap: post EOS on `Capture::close` so the bus watcher exits.
 - WASAPI resampler: split down/upsampling paths; drop dead `unwrap_or`.
 - `chunks_au` trigger: skip re-index when only non-FTS columns change.
+- hpm-embed: truncate tokenizer input to the model's position-embedding limit so long chunks no longer crash the ONNX Add node.
