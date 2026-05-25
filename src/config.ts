@@ -10,10 +10,17 @@ export interface ScreenCaptureConfig {
   format: 'png' | 'jpg'
 }
 
+type SystemAudioBackend = 'auto' | 'wasapi' | 'dshow'
+
 export interface AudioStreamConfig {
   enabled: boolean
   device: string
   chunk_ms: number
+  // Only meaningful for the system stream on Windows. Selects how system audio
+  // is captured: 'auto' prefers the WASAPI loopback helper (keeps capturing
+  // when output is muted) and falls back to DirectShow; 'dshow' forces the
+  // legacy virtual-audio-capturer path.
+  backend?: SystemAudioBackend
 }
 
 export interface AudioCaptureConfig {
@@ -71,7 +78,7 @@ const defaultConfig: Config = {
         hold_ms: 500,
       },
       mic: { enabled: true, device: 'default', chunk_ms: 5000 },
-      system: { enabled: true, device: 'default', chunk_ms: 5000 },
+      system: { enabled: true, device: 'default', chunk_ms: 5000, backend: 'auto' },
     },
   },
   processing: {

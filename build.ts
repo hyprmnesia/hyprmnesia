@@ -34,6 +34,9 @@
 //                NDJSON over stdio. Built everywhere by `cargo --workspace`
 //                but only copied into dist/native on darwin (no-op stub
 //                elsewhere).
+//    - hpm-wasapi : Windows WASAPI loopback helper, writes raw s16le mono PCM
+//                to stdout. Built everywhere by `cargo --workspace` but only
+//                copied into dist/native on win32 (no-op stub elsewhere).
 //    All crates live in a single Cargo workspace at the repo root so we build
 //    them in one cargo invocation.
 
@@ -55,6 +58,7 @@ const NATIVE_BINS: readonly string[] = [
   'hpm-ocr',
   'hpm-asr',
   ...(process.platform === 'darwin' ? ['hpm-sck'] : []),
+  ...(process.platform === 'win32' ? ['hpm-wasapi'] : []),
 ]
 const NATIVE_DEST_DIR = resolve('./dist/native')
 

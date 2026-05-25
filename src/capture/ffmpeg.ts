@@ -1,7 +1,30 @@
 import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
 
 export const SYSTEM_AUDIO_DSHOW_DEVICE = 'virtual-audio-capturer'
+
+// Locate the native WASAPI loopback helper, mirroring the candidate search used
+// for hpm-sck (see capture/sck.ts). Returns undefined when not built/bundled.
+export function findWasapiBinary(): string | undefined {
+  const name = process.platform === 'win32' ? 'hpm-wasapi.exe' : 'hpm-wasapi'
+  const candidates = [
+    join(dirname(process.execPath), 'native', name),
+    join(dirname(process.execPath), name),
+    join(process.cwd(), 'dist', 'native', name),
+    join(process.cwd(), 'dist', name),
+    join(process.cwd(), 'target', 'release', name),
+  ]
+  return candidates.find((p) => existsSync(p))
+}
+
+// hpm-wasapi emits final-format s16le mono PCM itself, so it needs only the
+// target rate and an optional device name.
+export function buildWasapiArgs(device: string, sampleRate: number): string[] {
+  const args = ['--rate', String(sampleRate)]
+  if (device && device !== 'default') args.push('--device', device)
+  return args
+}
 
 let cachedFfmpegPath: string | null = null
 
