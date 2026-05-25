@@ -14,11 +14,14 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use wasapi::{get_default_device, Direction, SampleType, StreamMode};
 
 const DEFAULT_RATE: u32 = 16_000;
+const EVENT_WAIT_MS: u32 = 2_000;
+const SILENCE_GAP_TOLERANCE_MS: u64 = 100;
 
 struct Args {
     rate: u32,
@@ -138,6 +141,29 @@ fn to_i16(sample: f32) -> i16 {
     (clamped * i16::MAX as f32) as i16
 }
 
+fn duration_to_samples(duration: Duration, sample_rate: u32) -> usize {
+    let samples = duration.as_nanos().saturating_mul(sample_rate as u128) / 1_000_000_000u128;
+    samples.min(usize::MAX as u128) as usize
+}
+
+fn samples_to_duration(samples: usize, sample_rate: u32) -> Duration {
+    Duration::from_secs_f64(samples as f64 / sample_rate as f64)
+}
+
+fn write_silence<W: Write>(writer: &mut W, samples: usize) -> Result<()> {
+    let mut remaining = samples.saturating_mul(2);
+    let zeros = [0u8; 8192];
+    while remaining > 0 {
+        let take = remaining.min(zeros.len());
+        writer
+            .write_all(&zeros[..take])
+            .context("write silent PCM to stdout (downstream closed?)")?;
+        remaining -= take;
+    }
+    writer.flush().ok();
+    Ok(())
+}
+
 // Decode one interleaved frame block (bytes) into mono f32 samples.
 fn decode_mono(
     bytes: &[u8],
@@ -242,14 +268,21 @@ pub fn run() -> Result<()> {
     let mut out: Vec<i16> = Vec::new();
     let stdout = io::stdout();
     let mut writer = io::BufWriter::new(stdout.lock());
+    let mut emitted_until = Instant::now();
 
     loop {
-        // Block until the next packet is ready; a long timeout doubles as a
-        // watchdog so a stalled endpoint doesn't hang us forever.
-        if event.wait_for_event(2_000).is_err() {
-            writer.flush().ok();
-            audio_client.stop_stream().ok();
-            break;
+        // Shared-mode loopback only produces packets while something is being
+        // rendered. During system silence WASAPI does not signal the event, but
+        // the TypeScript pipeline still needs continuous PCM so chunk_ms stays
+        // wall-clock bounded.
+        if event.wait_for_event(EVENT_WAIT_MS).is_err() {
+            let now = Instant::now();
+            write_silence(
+                &mut writer,
+                duration_to_samples(now.duration_since(emitted_until), args.rate),
+            )?;
+            emitted_until = now;
+            continue;
         }
 
         capture
@@ -259,6 +292,12 @@ pub fn run() -> Result<()> {
         // Drain whole frames; keep any trailing partial frame for next read.
         let usable = (queue.len() / block_align) * block_align;
         if usable == 0 {
+            let now = Instant::now();
+            write_silence(
+                &mut writer,
+                duration_to_samples(now.duration_since(emitted_until), args.rate),
+            )?;
+            emitted_until = now;
             continue;
         }
         let bytes: Vec<u8> = queue.drain(..usable).collect();
@@ -267,7 +306,23 @@ pub fn run() -> Result<()> {
         out.clear();
         resampler.push(&mono, &mut out);
         if out.is_empty() {
+            let now = Instant::now();
+            write_silence(
+                &mut writer,
+                duration_to_samples(now.duration_since(emitted_until), args.rate),
+            )?;
+            emitted_until = now;
             continue;
+        }
+        let now = Instant::now();
+        let elapsed = now.duration_since(emitted_until);
+        let packet_duration = samples_to_duration(out.len(), args.rate);
+        let tolerance = Duration::from_millis(SILENCE_GAP_TOLERANCE_MS);
+        if elapsed > packet_duration + tolerance {
+            write_silence(
+                &mut writer,
+                duration_to_samples(elapsed - packet_duration, args.rate),
+            )?;
         }
         let raw: &[u8] = i16_le_bytes(&out);
         writer
@@ -276,9 +331,8 @@ pub fn run() -> Result<()> {
         // Flush each packet so the parent's reader gets audio at capture latency
         // (~10 ms) rather than waiting for the BufWriter to fill.
         writer.flush().ok();
+        emitted_until = now;
     }
-
-    Ok(())
 }
 
 // Reinterpret i16 samples as little-endian bytes without an extra dependency.
