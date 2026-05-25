@@ -259,7 +259,7 @@ Section: utils
 Priority: optional
 Architecture: ${debArch()}
 Maintainer: Hyprmnesia <maintainers@hyprmnesia.local>
-Depends: ffmpeg, imagemagick, libgtk-3-0, libxdo3, libayatana-appindicator3-1, gstreamer1.0-plugins-base, gstreamer1.0-pipewire, pipewire
+Depends: ffmpeg, imagemagick, tesseract-ocr, libgtk-3-0, libxdo3, libayatana-appindicator3-1, gstreamer1.0-plugins-base, gstreamer1.0-pipewire, pipewire
 Description: Local-first screen and audio memory for desktop assistants
  Hyprmnesia records local screenshots, audio, and window context and exposes
  read-only search and replay surfaces.

@@ -1,7 +1,7 @@
 import type { OcrEngine } from '../types'
 import { NativeOcr } from './native'
 import { NoopOcr } from './noop'
-import { TesseractOcr } from './tesseract'
+import { TesseractOcr, type TesseractOptions } from './tesseract'
 
 // auto-pick the best available engine for the current platform.
 // preference order:
@@ -12,12 +12,16 @@ import { TesseractOcr } from './tesseract'
 // above, so subsequent process() calls don't re-probe.
 
 export class AutoOcr implements OcrEngine {
-  readonly name = 'auto'
   private chosen?: OcrEngine
+  constructor(private opts: TesseractOptions = {}) {}
+
+  get name(): string {
+    return this.chosen?.name ?? 'auto'
+  }
 
   async ready(): Promise<boolean> {
     if (this.chosen) return true
-    const candidates: OcrEngine[] = [new NativeOcr(), new TesseractOcr(), new NoopOcr()]
+    const candidates: OcrEngine[] = [new NativeOcr(), new TesseractOcr(this.opts), new NoopOcr()]
     for (const c of candidates) {
       if (await c.ready()) {
         this.chosen = c

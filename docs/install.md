@@ -78,6 +78,12 @@ during `bun run build` (or on first `dev` invocation that needs them).
 
 **Requirements:** macOS 13 or later (ScreenCaptureKit).
 
+- OCR uses Tesseract on macOS. Install it before starting capture:
+
+  ```sh
+  brew install tesseract
+  ```
+
 - Screen capture and system-audio capture are handled by the native helper
   `hpm-sck`, built from `sck/`. **No BlackHole or loopback driver is required.**
 - On first run, macOS prompts for **Screen Recording** permission in
@@ -124,7 +130,7 @@ Install the system packages used by the native tray, screen capture, and audio
 capture:
 
 ```sh
-sudo apt install libxdo-dev imagemagick ffmpeg
+sudo apt install libxdo-dev imagemagick ffmpeg tesseract-ocr
 ```
 
 - **`libxdo-dev`** — required to link the Rust tray helper (`tray/`).
@@ -134,6 +140,7 @@ sudo apt install libxdo-dev imagemagick ffmpeg
   `ffmpeg-static` binary lacks PulseAudio / PipeWire support, so on Linux
   Hyprmnesia uses the *system* `ffmpeg`. Debian/Ubuntu builds enable `libpulse`
   by default; `pipewire-pulse` provides the PA socket on modern desktops.
+- **`tesseract-ocr`** - provides OCR for screenshots.
 
 **Session requirement:** screen capture currently requires an **Xorg** session —
 `import` is X11-only. Wayland support is tracked in
@@ -203,3 +210,8 @@ your desktop at the login screen, then try again.
 **Linux — `ffmpeg` cannot find a PulseAudio source.**
 Make sure either PulseAudio or `pipewire-pulse` is running. `pactl info` should
 print a server name.
+
+**macOS/Linux - screenshots are captured but OCR text is empty.**
+Confirm Tesseract is installed with `tesseract --version`. If it is installed in
+a custom location, set `processing.ocr.options.binary` in
+`~/.hyprmnesia/config.yaml` to the absolute binary path.

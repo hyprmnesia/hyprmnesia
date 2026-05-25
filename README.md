@@ -333,6 +333,10 @@ mcp:
 ```
 
 OCR engines: `auto`, `native`, `tesseract`, `noop`.
+On Windows, `auto` uses the bundled native OCR helper. On macOS/Linux, install
+Tesseract (`brew install tesseract` or `apt install tesseract-ocr`); if it lives
+outside PATH and common package-manager locations, set
+`processing.ocr.options.binary` to the absolute binary path.
 Transcription engines: `parakeet`, `noop`. Old `auto` / `whisper` configs are
 treated as Parakeet for compatibility; `whisper-cli` is no longer used in the
 normal runtime path.
