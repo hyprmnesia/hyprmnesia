@@ -124,7 +124,14 @@ Install the system packages used by the native tray, screen capture, and audio
 capture:
 
 ```sh
-sudo apt install libxdo-dev imagemagick ffmpeg
+sudo apt install -y \
+  libxdo-dev \
+  imagemagick \
+  ffmpeg \
+  libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-tools \
+  gstreamer1.0-plugins-base
 ```
 
 - **`libxdo-dev`** — required to link the Rust tray helper (`tray/`).
@@ -134,6 +141,8 @@ sudo apt install libxdo-dev imagemagick ffmpeg
   `ffmpeg-static` binary lacks PulseAudio / PipeWire support, so on Linux
   Hyprmnesia uses the *system* `ffmpeg`. Debian/Ubuntu builds enable `libpulse`
   by default; `pipewire-pulse` provides the PA socket on modern desktops.
+- **GStreamer packages** — required to build and run the Linux capture helper
+  that uses the `gstreamer` Rust bindings.
 
 **Session requirement:** screen capture currently requires an **Xorg** session —
 `import` is X11-only. Wayland support is tracked in
