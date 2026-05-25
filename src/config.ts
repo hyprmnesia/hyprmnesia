@@ -8,6 +8,10 @@ export interface ScreenCaptureConfig {
   interval_ms: number
   monitor: 'primary' | 'all' | number
   format: 'png' | 'jpg'
+  // JPEG quality (1-100). Ignored when format is png.
+  quality: number
+  // Downscale captures to fit this width in pixels; 0 keeps native resolution.
+  max_width: number
 }
 
 type SystemAudioBackend = 'auto' | 'wasapi' | 'dshow'
@@ -69,6 +73,8 @@ const defaultConfig: Config = {
       interval_ms: 5000,
       monitor: 'primary',
       format: 'png',
+      quality: 80,
+      max_width: 0,
     },
     audio: {
       sample_rate: 16000,
@@ -161,6 +167,13 @@ function loadMergedConfig(path?: string): Config {
 }
 
 function normalizeConfig(config: Config): Config {
+  const screen = config.capture.screen
+  if (screen.format !== 'png' && screen.format !== 'jpg') screen.format = 'png'
+  if (!Number.isFinite(screen.quality)) screen.quality = defaultConfig.capture.screen.quality
+  screen.quality = Math.max(1, Math.min(100, Math.trunc(screen.quality)))
+  if (!Number.isFinite(screen.max_width) || screen.max_width < 0) screen.max_width = 0
+  screen.max_width = Math.trunc(screen.max_width)
+
   const tx = config.processing.transcription
   if (LEGACY_TRANSCRIPTION_ENGINES.has(tx.engine)) tx.engine = 'parakeet'
   if (!SUPPORTED_TRANSCRIPTION_ENGINES.has(tx.engine)) tx.engine = 'parakeet'

@@ -21,8 +21,8 @@ Tracked in GitHub issues, roughly ordered by priority.
 - [ ] [#13](https://github.com/hyprmnesia/hyprmnesia/issues/13) — code signing and notarization for Windows, macOS, and Linux installers
 - [x] [#7](https://github.com/hyprmnesia/hyprmnesia/issues/7) — Windows: keep system-audio capture working when the output is muted (WASAPI loopback via `hpm-wasapi`, with DirectShow fallback)
 - [ ] [#8](https://github.com/hyprmnesia/hyprmnesia/issues/8) — Linux: screen capture on Wayland (GNOME, KDE, wlroots) via xdg-desktop-portal / PipeWire
-- [ ] [#10](https://github.com/hyprmnesia/hyprmnesia/issues/10) — quick toggle to switch screen, mic, or system recording on/off
-- [ ] [#4](https://github.com/hyprmnesia/hyprmnesia/issues/4) — configurable capture quality (resolution, format, audio bitrate)
+- [x] [#10](https://github.com/hyprmnesia/hyprmnesia/issues/10) — quick toggle to switch screen, mic, or system recording on/off
+- [x] [#4](https://github.com/hyprmnesia/hyprmnesia/issues/4) — configurable capture quality (resolution, format, audio bitrate)
 - [ ] [#11](https://github.com/hyprmnesia/hyprmnesia/issues/11) — semantic search over captures via local embeddings, hybrid with FTS5
 
 ## Contents
@@ -231,6 +231,9 @@ one running daemon instead of spawning duplicates.
 | Key | Action |
 | --- | --- |
 | `x` | start the daemon if stopped, stop it if running |
+| `s` | toggle screen capture on/off (saves config, restarts daemon if running) |
+| `m` | toggle microphone capture on/off |
+| `y` | toggle system-audio capture on/off |
 | `r` | refresh status |
 | `c` | open settings |
 | `l` | open/close readable logs |
@@ -257,6 +260,8 @@ In Settings:
 --config <path>           config file, default ~/.hyprmnesia/config.yaml
 --data-dir <path>         where to store blobs and the index
 --screen-interval <ms>    screen capture interval
+--screen-quality <n>      JPEG quality 1-100 (jpg format only)
+--screen-max-width <n>    downscale captures to fit width in px (0 = native)
 --audio-chunk <ms>        chunk duration for mic and system audio
 --mic-device <name>       override mic device
 --system-device <name>    override system audio device
@@ -279,6 +284,8 @@ capture:
     interval_ms: 5000
     monitor: primary
     format: png
+    quality: 80      # JPEG quality 1-100 (ignored for png)
+    max_width: 0     # downscale to fit width in px; 0 keeps native resolution
   audio:
     sample_rate: 16000
     echo_suppression:

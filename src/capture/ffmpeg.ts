@@ -49,6 +49,60 @@ export function getFfmpegPath(): string {
   return cachedFfmpegPath
 }
 
+export interface ImageQualityOptions {
+  format: 'png' | 'jpg'
+  quality: number
+  maxWidth: number
+}
+
+/**
+ * Returns true when the configured quality settings require re-encoding the
+ * raw screenshot. PNG at native resolution is a pass-through, so default
+ * captures never pay the transcode cost.
+ */
+export function needsImageTranscode(opts: ImageQualityOptions): boolean {
+  return opts.maxWidth > 0 || opts.format === 'jpg'
+}
+
+/**
+ * Re-encodes a screenshot through ffmpeg to apply resolution and JPEG quality.
+ *
+ * Used on the screenshot-desktop capture path (Windows/Linux), which cannot
+ * downscale or set JPEG quality on its own. On any failure the original buffer
+ * is returned so capture keeps working even when ffmpeg is unavailable.
+ */
+export async function transcodeImage(input: Buffer, opts: ImageQualityOptions): Promise<Buffer> {
+  const args = ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0']
+  if (opts.maxWidth > 0) {
+    // -2 keeps the aspect ratio while forcing even dimensions, which mjpeg needs.
+    args.push('-vf', `scale='min(${opts.maxWidth},iw)':-2`)
+  }
+  if (opts.format === 'jpg') {
+    const quality = Math.max(1, Math.min(100, Math.trunc(opts.quality)))
+    // mjpeg uses qscale 2 (best) to 31 (worst); map 1-100 onto that range.
+    const qscale = Math.round(2 + ((100 - quality) / 99) * 29)
+    args.push('-q:v', String(qscale), '-f', 'mjpeg')
+  } else {
+    args.push('-c:v', 'png', '-f', 'image2pipe')
+  }
+  args.push('pipe:1')
+
+  try {
+    const proc = Bun.spawn([getFfmpegPath(), ...args], {
+      stdin: input,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      windowsHide: true,
+    })
+    const out = Buffer.from(await new Response(proc.stdout).arrayBuffer())
+    const exit = await proc.exited
+    if (exit !== 0 || out.length === 0) return input
+    return out
+  } catch {
+    return input
+  }
+}
+
 export async function listDshowAudioDevices(): Promise<string[]> {
   // FFmpeg is a console binary on Windows; hide its transient console while we
   // query dshow devices in daemon/TUI flows.

@@ -5,6 +5,7 @@ import type { EventBus, WindowContext } from '../core/events'
 import type { OcrEngine } from '../process/types'
 import type { BlobStore } from '../store/blobs'
 import type { ChunkStore } from '../store/db'
+import { needsImageTranscode, transcodeImage } from './ffmpeg'
 import type { SckBus, SckFrameEvent } from './sck'
 
 export interface ScreenCaptureDeps {
@@ -78,10 +79,14 @@ export function startScreenCapture({
     })
   }
 
+  const qualityOpts = { format: cfg.format, quality: cfg.quality, maxWidth: cfg.max_width }
+  const transcode = needsImageTranscode(qualityOpts)
+
   async function tick() {
     const start = Date.now()
     try {
-      const buf = (await screenshot({ format: cfg.format })) as Buffer
+      const raw = (await screenshot({ format: cfg.format })) as Buffer
+      const buf = transcode ? await transcodeImage(raw, qualityOpts) : raw
       const id = randomUUIDv7()
       const path = await blobs.write('screenshot', id, cfg.format, buf)
       const text = await ocr.process(buf)

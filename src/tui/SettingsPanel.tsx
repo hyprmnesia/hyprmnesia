@@ -68,6 +68,23 @@ export function settingsFields(config: Config): SettingField[] {
       hint: 'image format',
     },
     {
+      label: 'Screen quality',
+      path: ['capture', 'screen', 'quality'],
+      kind: 'number',
+      step: 5,
+      min: 1,
+      max: 100,
+      hint: 'JPEG quality (jpg only)',
+    },
+    {
+      label: 'Screen max width',
+      path: ['capture', 'screen', 'max_width'],
+      kind: 'number',
+      step: 320,
+      min: 0,
+      hint: 'px, 0 = native resolution',
+    },
+    {
       label: 'Mic capture',
       path: ['capture', 'audio', 'mic', 'enabled'],
       kind: 'bool',

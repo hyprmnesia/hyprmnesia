@@ -125,6 +125,7 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
           channelCount: 2,
           frameIntervalMs: cfg.capture.screen.interval_ms,
           imageFormat: cfg.capture.screen.format,
+          jpegQuality: cfg.capture.screen.quality,
           captureAudio: wantSckSystemAudio,
           captureVideo: wantSckScreen,
         },
