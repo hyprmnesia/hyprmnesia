@@ -7,6 +7,13 @@ import type { BlobStore } from '../store/blobs'
 import type { ChunkStore } from '../store/db'
 import { needsImageTranscode, transcodeImage } from './ffmpeg'
 import type { SckBus, SckFrameEvent } from './sck'
+import { createWlcapBus } from './wlcap'
+
+interface FrameBus {
+  start(): Promise<void>
+  stop(): Promise<void>
+  onFrame(handler: (frame: SckFrameEvent) => void): () => void
+}
 
 export interface ScreenCaptureDeps {
   cfg: ScreenCaptureConfig
@@ -23,11 +30,10 @@ export interface CaptureRunner {
   done: Promise<void>
 }
 
-// TODO(Linux/Wayland): screenshot-desktop shells out to ImageMagick's `import`,
-// which only works under X11. On Wayland sessions every tick fails. For now,
-// users must log into an Xorg session. Full Wayland support (Portal Screenshot
-// or ScreenCast/PipeWire) is tracked in
-// https://github.com/hyprmnesia/hyprmnesia/issues/8
+// Backend selection: macOS uses the ScreenCaptureKit helper (hpm-sck); Wayland
+// uses the xdg-desktop-portal ScreenCast helper (hpm-wlcap); everything else
+// falls back to screenshot-desktop, which shells out to ImageMagick's X11-only
+// `import`.
 export function startScreenCapture({
   cfg,
   blobs,
@@ -48,18 +54,18 @@ export function startScreenCapture({
   }
 
   if (process.platform === 'darwin' && sck) {
-    return startSckScreen({ cfg, blobs, store, ocr, events, sck, getWindow })
+    return startWorkerScreen({ cfg, blobs, store, ocr, events, getWindow }, sck, 'sck')
   }
 
-  if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY && !process.env.DISPLAY) {
-    events.publish({
-      type: 'error',
-      source: 'screen',
-      at: Date.now(),
-      message:
-        'Wayland screen capture is not implemented yet — see https://github.com/hyprmnesia/hyprmnesia/issues/8. Log into an Xorg session for now, or disable screen capture with --no-screen.',
-    })
-    return { stop: () => {}, done: Promise.resolve() }
+  if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) {
+    const wlcap = createWlcapBus(
+      {
+        frameIntervalMs: cfg.interval_ms,
+        imageFormat: cfg.format,
+      },
+      events,
+    )
+    return startWorkerScreen({ cfg, blobs, store, ocr, events, getWindow }, wlcap, 'wlcap')
   }
 
   let running = true
@@ -143,15 +149,11 @@ export function startScreenCapture({
   }
 }
 
-function startSckScreen({
-  cfg,
-  blobs,
-  store,
-  ocr,
-  events,
-  sck,
-  getWindow,
-}: ScreenCaptureDeps & { sck: SckBus }): CaptureRunner {
+function startWorkerScreen(
+  { cfg, blobs, store, ocr, events, getWindow }: ScreenCaptureDeps,
+  frames: FrameBus,
+  engine: string,
+): CaptureRunner {
   let running = true
   let lastAcceptedAt = 0
 
@@ -192,13 +194,13 @@ function startSckScreen({
 
   const done = (async () => {
     try {
-      await sck.start()
+      await frames.start()
     } catch (err) {
       events.publish({
         type: 'error',
         source: 'screen',
         at: Date.now(),
-        message: `sck start failed: ${String(err)}`,
+        message: `${engine} start failed: ${String(err)}`,
       })
       return
     }
@@ -208,13 +210,13 @@ function startSckScreen({
       type: 'started',
       source: 'screen',
       at: Date.now(),
-      meta: { interval_ms: cfg.interval_ms, format: cfg.format, engine: 'sck' },
+      meta: { interval_ms: cfg.interval_ms, format: cfg.format, engine },
     })
 
     let pending: Promise<void> = Promise.resolve()
-    const unsubscribe = sck.onFrame((frame) => {
+    const unsubscribe = frames.onFrame((frame) => {
       if (!running) return
-      // SCK emits frames at the display refresh rate; throttle to interval_ms.
+      // Frames may arrive faster than interval_ms; throttle to interval_ms.
       if (frame.at - lastAcceptedAt < cfg.interval_ms) return
       lastAcceptedAt = frame.at
       pending = pending.then(() => processFrame(frame))

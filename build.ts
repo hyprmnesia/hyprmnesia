@@ -60,6 +60,7 @@ const NATIVE_BINS: readonly string[] = [
   'hpm-embed',
   ...(process.platform === 'darwin' ? ['hpm-sck'] : []),
   ...(process.platform === 'win32' ? ['hpm-wasapi'] : []),
+  ...(process.platform === 'linux' ? ['hpm-wlcap'] : []),
 ]
 const NATIVE_DEST_DIR = resolve('./dist/native')
 

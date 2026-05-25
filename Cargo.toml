@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tray", "ocr", "asr", "sck", "wasapi", "embed"]
+members = ["tray", "ocr", "asr", "sck", "wasapi", "embed", "wlcap"]
 [profile.release]
 opt-level = 3
 lto = true
