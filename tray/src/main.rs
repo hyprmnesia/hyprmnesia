@@ -793,6 +793,7 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn candidates_include_parent_for_packaged_layout() {
         // Packaged installs put the tray in `<install>/native/` and the CLI in
@@ -800,6 +801,17 @@ mod tests {
         // when launched at boot with an unrelated working directory.
         let tray_dir = Path::new("/opt/hyprmnesia/native");
         let expected = tray_dir.parent().unwrap().join(executable_name("hpm"));
+        assert!(hpm_candidates(tray_dir).contains(&expected));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn candidates_include_parent_for_windows_install() {
+        // MSI installs land under %LOCALAPPDATA%\Programs\Hyprmnesia\native; at
+        // boot the Run key launches the tray with cwd = system32, so the
+        // sibling-of-parent candidate is the only one that resolves.
+        let tray_dir = Path::new(r"C:\Users\Test\AppData\Local\Programs\Hyprmnesia\native");
+        let expected = tray_dir.parent().unwrap().join("hpm.exe");
         assert!(hpm_candidates(tray_dir).contains(&expected));
     }
 }

@@ -101,31 +101,32 @@ impl Resampler {
         self.history.extend_from_slice(src);
         let samples = &self.history;
         // `pos` is indexed against `src`; offset by 1 for the carried sample.
-        while self.pos < src.len() as f64 {
-            let lo = self.pos.floor();
-            let frac = self.pos - lo;
-            let i = lo as usize + 1; // +1 for carried sample at index 0
-            let a = samples[i - 1];
-            let b = samples.get(i).copied().unwrap_or(a);
-            let mut value = a + (b - a) * frac as f32;
-            // Box-average across the step when downsampling.
-            if self.ratio > 1.0 {
-                let start = self.pos.max(0.0);
+        if self.ratio > 1.0 {
+            // Downsampling: box-average across the step.
+            while self.pos < src.len() as f64 {
                 let end = (self.pos + self.ratio).min(src.len() as f64);
                 let mut acc = 0.0f32;
                 let mut n = 0u32;
-                let mut k = start.floor() as usize;
+                let mut k = self.pos.floor() as usize;
                 while (k as f64) < end {
                     acc += samples[k + 1];
                     n += 1;
                     k += 1;
                 }
-                if n > 0 {
-                    value = acc / n as f32;
-                }
+                // n >= 1: pos.floor() < end because end > pos.
+                out.push(to_i16(acc / n as f32));
+                self.pos += self.ratio;
             }
-            out.push(to_i16(value));
-            self.pos += self.ratio;
+        } else {
+            // Upsampling or same-rate: linear interpolation.
+            while self.pos < src.len() as f64 {
+                let lo = self.pos.floor();
+                let i = lo as usize + 1;
+                let a = samples[i - 1];
+                let b = samples[i];
+                out.push(to_i16(a + (b - a) * (self.pos - lo) as f32));
+                self.pos += self.ratio;
+            }
         }
         self.pos -= src.len() as f64;
         self.last = src[src.len() - 1];

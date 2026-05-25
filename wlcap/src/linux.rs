@@ -86,6 +86,11 @@ struct Capture {
 
 impl Capture {
     fn close(self) {
+        // The bus watcher blocks on iter_timed(ClockTime::NONE); set_state(Null)
+        // does not wake it. Post EOS explicitly so the watcher exits.
+        if let Some(bus) = self.pipeline.bus() {
+            let _ = bus.post(gst::message::Eos::new());
+        }
         let _ = self.pipeline.set_state(gst::State::Null);
         if let Ok(session) = Proxy::new(
             &self.conn,

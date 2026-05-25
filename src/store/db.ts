@@ -116,10 +116,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
   tokenize='unicode61 remove_diacritics 2'
 );
 
--- chunks_au re-indexes on every UPDATE, including ones that touch only
--- non-FTS columns (audio_engine). Tolerable while updateText is the only
--- updater and writes text + audio_engine together; revisit with a WHEN
--- clause if other narrow UPDATEs appear.
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
   INSERT INTO chunks_fts(rowid, text, window_app, window_title, window_url)
   VALUES (new.rowid, new.text, new.window_app, new.window_title, new.window_url);
@@ -130,7 +126,14 @@ CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
   VALUES('delete', old.rowid, old.text, old.window_app, old.window_title, old.window_url);
 END;
 
-CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+-- WHEN clause skips re-indexing when only non-FTS columns change (e.g.
+-- audio_engine via appendChunkTextStmt setting it on each transcript flush).
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks
+WHEN old.text IS NOT new.text
+  OR old.window_app IS NOT new.window_app
+  OR old.window_title IS NOT new.window_title
+  OR old.window_url IS NOT new.window_url
+BEGIN
   INSERT INTO chunks_fts(chunks_fts, rowid, text, window_app, window_title, window_url)
   VALUES('delete', old.rowid, old.text, old.window_app, old.window_title, old.window_url);
   INSERT INTO chunks_fts(rowid, text, window_app, window_title, window_url)
@@ -229,6 +232,7 @@ function migrate(db: Database, vecLoaded: boolean): boolean {
       db.run('PRAGMA user_version = 2')
     })()
   }
+  ensureChunksAuTrigger(db)
   if (!vecLoaded) return false
   if (version < 3) {
     db.transaction(() => {
@@ -237,6 +241,27 @@ function migrate(db: Database, vecLoaded: boolean): boolean {
     })()
   }
   return true
+}
+
+// Pre-WHEN-clause DBs created chunks_au without a guard, so audio_engine-only
+// UPDATEs forced a full FTS re-index. CREATE TRIGGER IF NOT EXISTS in SCHEMA_V1
+// won't replace the existing trigger; DROP + CREATE on every open is cheap and
+// idempotent.
+function ensureChunksAuTrigger(db: Database): void {
+  db.transaction(() => {
+    db.run('DROP TRIGGER IF EXISTS chunks_au')
+    db.run(`CREATE TRIGGER chunks_au AFTER UPDATE ON chunks
+      WHEN old.text IS NOT new.text
+        OR old.window_app IS NOT new.window_app
+        OR old.window_title IS NOT new.window_title
+        OR old.window_url IS NOT new.window_url
+      BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, text, window_app, window_title, window_url)
+        VALUES('delete', old.rowid, old.text, old.window_app, old.window_title, old.window_url);
+        INSERT INTO chunks_fts(rowid, text, window_app, window_title, window_url)
+        VALUES (new.rowid, new.text, new.window_app, new.window_title, new.window_url);
+      END`)
+  })()
 }
 
 export function openChunkStore(dbPath: string): ChunkStore {

@@ -175,16 +175,21 @@ interface ToolResult {
 // read store transparently falls back to FTS5.
 type QueryEncoder = (text: string) => Promise<Float32Array | undefined>
 
-// Owns a single warm embedding worker for the lifetime of the MCP server. The
-// worker is started lazily on the first semantic/hybrid query; any failure is
-// swallowed and disables semantic search for the session.
-function makeQueryEncoder(): { encode: QueryEncoder; stop: () => Promise<void> } {
+// Owns a single warm embedding worker for the lifetime of the MCP server.
+// `warm()` kicks off the engine at server boot so the first query doesn't pay
+// the model-load cost; a failed attempt clears the cached promise so a later
+// request retries instead of disabling semantic search for the whole session.
+function makeQueryEncoder(): {
+  encode: QueryEncoder
+  warm: () => void
+  stop: () => Promise<void>
+} {
   let engine: EmbeddingEngine | undefined
   let startup: Promise<boolean> | undefined
 
   async function ensure(): Promise<boolean> {
     if (startup) return startup
-    startup = (async () => {
+    const attempt = (async () => {
       try {
         const cfg = loadConfig()
         const candidate = makeEmbedding(cfg.processing.embeddings)
@@ -197,7 +202,10 @@ function makeQueryEncoder(): { encode: QueryEncoder; stop: () => Promise<void> }
         return false
       }
     })()
-    return startup
+    startup = attempt
+    const ok = await attempt
+    if (!ok) startup = undefined
+    return ok
   }
 
   return {
@@ -209,6 +217,9 @@ function makeQueryEncoder(): { encode: QueryEncoder; stop: () => Promise<void> }
       } catch {
         return undefined
       }
+    },
+    warm() {
+      void ensure().catch(() => undefined)
     },
     async stop() {
       await engine?.stop().catch(() => {})
@@ -609,6 +620,7 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
   const port = options.port ?? 37373
 
   const encoder = makeQueryEncoder()
+  encoder.warm()
   try {
     if (transport === 'stdio') {
       await startStdioMcpServer(dbPath, encoder.encode)
