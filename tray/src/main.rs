@@ -10,7 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tao::event::{Event, StartCause};
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder};
+#[cfg(target_os = "macos")]
+use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder,
@@ -33,6 +35,7 @@ impl TrayState {
 }
 
 const APP_NAME: &str = "Hyprmnesia";
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 const STARTUP_NAME: &str = "Hyprmnesia Tray";
 const REFRESH_EVERY: Duration = Duration::from_secs(2);
 
@@ -91,8 +94,10 @@ fn main() {
         Ok(paths) => paths,
         Err(_) => return,
     };
+    configure_notification_application();
 
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    configure_event_loop(&mut event_loop);
     let proxy = event_loop.create_proxy();
     // tray-icon menu callbacks arrive outside tao's event loop, so bounce them
     // through a user event and keep all menu state changes on one thread.
@@ -170,6 +175,27 @@ fn main() {
         }
     });
 }
+
+#[cfg(target_os = "macos")]
+fn configure_event_loop<T>(event_loop: &mut EventLoop<T>) {
+    event_loop.set_activation_policy(ActivationPolicy::Accessory);
+    event_loop.set_dock_visibility(false);
+    event_loop.set_activate_ignoring_other_apps(false);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_event_loop<T>(_: &mut EventLoop<T>) {}
+
+#[cfg(target_os = "macos")]
+fn configure_notification_application() {
+    // notify-rust's macOS default asks AppleScript for an app named
+    // "use_default", which opens a "Choose Application" dialog. Set a known
+    // system bundle id up front so the first daemon transition notification is quiet.
+    let _ = notify_rust::set_application("com.apple.finder");
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_notification_application() {}
 
 fn build_menu() -> (Menu, TrayMenu) {
     let menu = Menu::new();
@@ -628,7 +654,7 @@ fn open_path(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn command_exists(program: &str) -> bool {
     env::var_os("PATH")
         .is_some_and(|paths| env::split_paths(&paths).any(|dir| dir.join(program).exists()))

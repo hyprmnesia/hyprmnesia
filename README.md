@@ -54,6 +54,19 @@ Tracked in GitHub issues, roughly ordered by priority.
 
 ## Quickstart
 
+On Debian/Ubuntu, install the native Linux capture dependencies first:
+
+```sh
+sudo apt install -y \
+  libxdo-dev \
+  imagemagick \
+  ffmpeg \
+  libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-tools \
+  gstreamer1.0-plugins-base
+```
+
 ```sh
 git clone https://github.com/hyprmnesia/hyprmnesia.git
 cd hyprmnesia
