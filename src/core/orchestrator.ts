@@ -2,6 +2,8 @@ import { startAudioCapture } from '../capture/audio'
 import { createSckBus, type SckBus } from '../capture/sck'
 import { startScreenCapture } from '../capture/screen'
 import type { Config } from '../config'
+import { EmbeddingQueue } from '../process/embedding_queue'
+import { makeEmbedding } from '../process/embeddings'
 import { makeOcr } from '../process/ocr'
 import { makeTranscription } from '../process/transcription'
 import { TranscriptionQueue } from '../process/transcription_queue'
@@ -41,13 +43,29 @@ interface Runner {
   done: Promise<void>
 }
 
+function embeddingQueueOptions(cfg: Config) {
+  const opts = cfg.processing.embeddings.options ?? {}
+  const rawSources = Array.isArray(opts.sources) ? opts.sources : ['screen', 'mic', 'system']
+  const sources = rawSources.filter(
+    (s): s is Source => s === 'screen' || s === 'mic' || s === 'system',
+  )
+  return {
+    model: typeof opts.model === 'string' ? opts.model : 'multilingual-e5-small',
+    dim: typeof opts.dim === 'number' ? opts.dim : 384,
+    batchSize: typeof opts.batch_size === 'number' ? Math.max(1, Math.trunc(opts.batch_size)) : 16,
+    sources: sources.length > 0 ? sources : (['screen', 'mic', 'system'] as Source[]),
+  }
+}
+
 export function makeOrchestrator(cfg: Config): Orchestrator {
   const events = new EventBus()
   const blobs = makeBlobStore(cfg.storage.path)
   const store = openChunkStore(defaultDbPath())
   const ocr = makeOcr(cfg.processing.ocr)
   const transcription = makeTranscription(cfg.processing.transcription, events)
+  const embedding = makeEmbedding(cfg.processing.embeddings, events)
   let transcriptionQueue: TranscriptionQueue | undefined
+  let embeddingQueue: EmbeddingQueue | undefined
 
   let running = false
   let stopping: Promise<void> | undefined
@@ -94,6 +112,9 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
     windowTracker = startWindowTracker(events)
     transcriptionQueue = new TranscriptionQueue(transcription, store, events)
     await transcriptionQueue.start()
+
+    embeddingQueue = new EmbeddingQueue(embedding, store, events, embeddingQueueOptions(cfg))
+    await embeddingQueue.start()
 
     const wantSckScreen = process.platform === 'darwin' && cfg.capture.screen.enabled
     const wantSckSystemAudio = process.platform === 'darwin' && cfg.capture.audio.system.enabled
@@ -150,6 +171,8 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
       const activeRunners = runners.splice(0)
       const activeQueue = transcriptionQueue
       transcriptionQueue = undefined
+      const activeEmbeddingQueue = embeddingQueue
+      embeddingQueue = undefined
 
       for (const r of activeRunners) r.stop()
       windowTracker?.stop()
@@ -170,6 +193,7 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
         sck = undefined
       }
       await activeQueue?.stop()
+      await activeEmbeddingQueue?.stop()
       closeStore()
       events.publish({
         type: 'log',

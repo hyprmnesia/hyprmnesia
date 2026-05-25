@@ -54,6 +54,7 @@ export interface Config {
   processing: {
     ocr: EngineConfig
     transcription: EngineConfig
+    embeddings: EngineConfig
   }
   storage: {
     path: string
@@ -97,6 +98,15 @@ const defaultConfig: Config = {
         },
       },
     },
+    embeddings: {
+      engine: 'local',
+      options: {
+        model: 'multilingual-e5-small',
+        dim: 384,
+        batch_size: 16,
+        sources: ['screen', 'mic', 'system'],
+      },
+    },
   },
   storage: {
     path: '~/.hyprmnesia/data',
@@ -113,6 +123,10 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]>
 const DEFAULT_PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3'
 const LEGACY_TRANSCRIPTION_ENGINES = new Set(['auto', 'whisper'])
 const SUPPORTED_TRANSCRIPTION_ENGINES = new Set(['parakeet', 'noop'])
+
+const DEFAULT_EMBEDDING_MODEL = 'multilingual-e5-small'
+const DEFAULT_EMBEDDING_DIM = 384
+const SUPPORTED_EMBEDDING_ENGINES = new Set(['local', 'noop'])
 
 function deepMerge<T>(base: T, override: DeepPartial<T>): T {
   if (override === null || override === undefined) return base
@@ -161,6 +175,19 @@ function normalizeConfig(config: Config): Config {
       >,
     )
   }
+  const emb = config.processing.embeddings
+  if (!emb || typeof emb !== 'object') {
+    config.processing.embeddings = deepMerge(defaultConfig.processing.embeddings, {})
+  } else {
+    if (!SUPPORTED_EMBEDDING_ENGINES.has(emb.engine)) emb.engine = 'local'
+    if (emb.engine === 'local') {
+      emb.options ??= {}
+      // v1 locks the model/dim pair; the vec0 schema is built for 384 dims.
+      emb.options.model = DEFAULT_EMBEDDING_MODEL
+      emb.options.dim = DEFAULT_EMBEDDING_DIM
+    }
+  }
+
   if (config.mcp.transport !== 'stdio' && config.mcp.transport !== 'http')
     config.mcp.transport = 'stdio'
   if (typeof config.mcp.bind !== 'string' || config.mcp.bind.trim() === '')

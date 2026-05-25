@@ -9,8 +9,24 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { WindowContext } from '../core/events'
+import { loadVecExtension, serializeVector } from './vec'
 
 type ChunkKind = 'screenshot' | 'audio_mic' | 'audio_system'
+
+export type EmbeddingKind = 'segment' | 'chunk'
+
+interface EmbeddingRow {
+  kind: EmbeddingKind
+  id: string
+  vector: Float32Array
+  model: string
+  dim: number
+}
+
+export interface PendingEmbedding {
+  id: string
+  text: string
+}
 
 interface ChunkRow {
   id: string
@@ -62,6 +78,10 @@ export interface ChunkStore {
   // trigger only re-indexes once. Called once per audio chunk today; designed
   // to also tolerate repeated calls per id for future live transcription.
   updateText(id: string, text: string, audioEngine?: string): void
+  // True when the sqlite-vec extension loaded and the vector tables exist.
+  readonly vecEnabled: boolean
+  insertEmbedding(row: EmbeddingRow): void
+  pendingEmbeddings(kind: EmbeddingKind, model: string, limit: number): PendingEmbedding[]
   close(): void
 }
 
@@ -157,12 +177,40 @@ CREATE TRIGGER IF NOT EXISTS transcript_segments_au AFTER UPDATE ON transcript_s
 END;
 `
 
+// Vector tables live behind sqlite-vec. The 384-dim layout matches the v1
+// embedding model (multilingual-e5-small). embedding_meta records which rows are
+// already embedded with which model so backfill can skip them.
+const SCHEMA_V3 = `
+CREATE VIRTUAL TABLE IF NOT EXISTS transcript_segment_vec USING vec0(
+  segment_id TEXT PRIMARY KEY,
+  embedding  float[384]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
+  chunk_id  TEXT PRIMARY KEY,
+  embedding float[384]
+);
+
+CREATE TABLE IF NOT EXISTS embedding_meta (
+  id          TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  model       TEXT NOT NULL,
+  dim         INTEGER NOT NULL,
+  embedded_at INTEGER NOT NULL,
+  PRIMARY KEY (id, kind)
+);
+`
+
 function columnExists(db: Database, table: string, column: string): boolean {
   const rows = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all()
   return rows.some((row) => row.name === column)
 }
 
-function migrate(db: Database): void {
+// Returns true once the schema is at v3 (vector tables present). The v3 step is
+// gated on the sqlite-vec extension: without it we stay at v2 and embeddings are
+// disabled, but capture/FTS5 keep working. The step is idempotent, so a later
+// run with the extension available will upgrade in place.
+function migrate(db: Database, vecLoaded: boolean): boolean {
   const row = db.query<{ user_version: number }, []>('PRAGMA user_version').get()
   const version = row?.user_version ?? 0
   if (version < 1) {
@@ -181,6 +229,14 @@ function migrate(db: Database): void {
       db.run('PRAGMA user_version = 2')
     })()
   }
+  if (!vecLoaded) return false
+  if (version < 3) {
+    db.transaction(() => {
+      db.run(SCHEMA_V3)
+      db.run('PRAGMA user_version = 3')
+    })()
+  }
+  return true
 }
 
 export function openChunkStore(dbPath: string): ChunkStore {
@@ -189,7 +245,8 @@ export function openChunkStore(dbPath: string): ChunkStore {
   db.run('PRAGMA journal_mode = WAL')
   db.run('PRAGMA synchronous = NORMAL')
   db.run('PRAGMA foreign_keys = ON')
-  migrate(db)
+  const vecLoaded = loadVecExtension(db)
+  const vecEnabled = migrate(db, vecLoaded)
 
   const insertStmt = db.prepare(`
     INSERT INTO chunks (
@@ -241,7 +298,41 @@ export function openChunkStore(dbPath: string): ChunkStore {
     WHERE id = $chunk_id
   `)
 
+  const vecStmts = vecEnabled
+    ? {
+        deleteSegmentVec: db.prepare('DELETE FROM transcript_segment_vec WHERE segment_id = $id'),
+        insertSegmentVec: db.prepare(
+          'INSERT INTO transcript_segment_vec (segment_id, embedding) VALUES ($id, $embedding)',
+        ),
+        deleteChunkVec: db.prepare('DELETE FROM chunk_vec WHERE chunk_id = $id'),
+        insertChunkVec: db.prepare(
+          'INSERT INTO chunk_vec (chunk_id, embedding) VALUES ($id, $embedding)',
+        ),
+        upsertMeta: db.prepare(`
+          INSERT INTO embedding_meta (id, kind, model, dim, embedded_at)
+          VALUES ($id, $kind, $model, $dim, $embedded_at)
+          ON CONFLICT(id, kind) DO UPDATE SET
+            model = excluded.model, dim = excluded.dim, embedded_at = excluded.embedded_at
+        `),
+        pendingSegments: db.prepare<PendingEmbedding, { $model: string; $limit: number }>(`
+          SELECT s.id AS id, s.text AS text
+          FROM transcript_segments s
+          LEFT JOIN embedding_meta m ON m.id = s.id AND m.kind = 'segment' AND m.model = $model
+          WHERE m.id IS NULL AND COALESCE(s.text, '') <> ''
+          LIMIT $limit
+        `),
+        pendingChunks: db.prepare<PendingEmbedding, { $model: string; $limit: number }>(`
+          SELECT c.id AS id, c.text AS text
+          FROM chunks c
+          LEFT JOIN embedding_meta m ON m.id = c.id AND m.kind = 'chunk' AND m.model = $model
+          WHERE m.id IS NULL AND c.kind = 'screenshot' AND COALESCE(c.text, '') <> ''
+          LIMIT $limit
+        `),
+      }
+    : undefined
+
   return {
+    vecEnabled,
     insert(row) {
       insertStmt.run({
         $id: row.id,
@@ -302,6 +393,31 @@ export function openChunkStore(dbPath: string): ChunkStore {
         updateTextStmt.run({ $id: id, $text: text })
       }
     },
+    insertEmbedding(row) {
+      if (!vecStmts) return
+      const embedding = serializeVector(row.vector)
+      db.transaction(() => {
+        if (row.kind === 'segment') {
+          vecStmts.deleteSegmentVec.run({ $id: row.id })
+          vecStmts.insertSegmentVec.run({ $id: row.id, $embedding: embedding })
+        } else {
+          vecStmts.deleteChunkVec.run({ $id: row.id })
+          vecStmts.insertChunkVec.run({ $id: row.id, $embedding: embedding })
+        }
+        vecStmts.upsertMeta.run({
+          $id: row.id,
+          $kind: row.kind,
+          $model: row.model,
+          $dim: row.dim,
+          $embedded_at: Date.now(),
+        })
+      })()
+    },
+    pendingEmbeddings(kind, model, limit) {
+      if (!vecStmts) return []
+      const stmt = kind === 'segment' ? vecStmts.pendingSegments : vecStmts.pendingChunks
+      return stmt.all({ $model: model, $limit: limit })
+    },
     close() {
       insertStmt.finalize()
       updateTextStmt.finalize()
@@ -309,6 +425,7 @@ export function openChunkStore(dbPath: string): ChunkStore {
       finalizeAudioChunkStmt.finalize()
       insertSegmentStmt.finalize()
       appendChunkTextStmt.finalize()
+      if (vecStmts) for (const stmt of Object.values(vecStmts)) stmt.finalize()
       db.close()
     },
   }
