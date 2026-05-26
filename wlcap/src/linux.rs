@@ -499,8 +499,14 @@ mod tests {
 
     #[test]
     fn image_format_parse_accepts_jpeg_jpg_case_insensitive() {
-        assert!(matches!(ImageFormat::parse(Some("jpeg")), ImageFormat::Jpeg));
-        assert!(matches!(ImageFormat::parse(Some("JPEG")), ImageFormat::Jpeg));
+        assert!(matches!(
+            ImageFormat::parse(Some("jpeg")),
+            ImageFormat::Jpeg
+        ));
+        assert!(matches!(
+            ImageFormat::parse(Some("JPEG")),
+            ImageFormat::Jpeg
+        ));
         assert!(matches!(ImageFormat::parse(Some("jpg")), ImageFormat::Jpeg));
         assert!(matches!(ImageFormat::parse(Some("JPG")), ImageFormat::Jpeg));
     }
@@ -564,7 +570,10 @@ mod tests {
     #[test]
     fn request_rejects_unknown_type() {
         let err = serde_json::from_str::<Request>(r#"{"type":"frobnicate"}"#);
-        assert!(err.is_err(), "unknown request type must fail to deserialize");
+        assert!(
+            err.is_err(),
+            "unknown request type must fail to deserialize"
+        );
     }
 
     #[test]

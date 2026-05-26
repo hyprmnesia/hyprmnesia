@@ -60,7 +60,11 @@ fn next_line(rx: &Receiver<String>, timeout: Duration) -> Option<String> {
 /// deadline. Returns the matching line. Used when other "noise" lines (like
 /// `status` events emitted during init) may interleave with the one we care
 /// about.
-fn next_line_matching<F>(rx: &Receiver<String>, timeout: Duration, mut predicate: F) -> Option<String>
+fn next_line_matching<F>(
+    rx: &Receiver<String>,
+    timeout: Duration,
+    mut predicate: F,
+) -> Option<String>
 where
     F: FnMut(&str) -> bool,
 {
@@ -135,7 +139,10 @@ fn embed_before_init_returns_a_model_not_loaded_error_keyed_by_id() {
 
     let line = next_line(&rx, Duration::from_secs(5)).expect("error line");
     assert!(line.contains("\"type\":\"error\""), "got: {line}");
-    assert!(line.contains("\"id\":\"req-7\""), "error should echo id, got: {line}");
+    assert!(
+        line.contains("\"id\":\"req-7\""),
+        "error should echo id, got: {line}"
+    );
     assert!(line.contains("model not loaded"), "got: {line}");
 
     // Sidecar must remain responsive after the error.
@@ -159,11 +166,7 @@ fn malformed_json_emits_invalid_request_error_and_keeps_processing() {
 
     // After the error the binary keeps reading: send an embed request and
     // expect another error (model not loaded), proving the loop continued.
-    writeln!(
-        stdin,
-        r#"{{"type":"embed","id":"after-bad","text":"hi"}}"#
-    )
-    .expect("write embed");
+    writeln!(stdin, r#"{{"type":"embed","id":"after-bad","text":"hi"}}"#).expect("write embed");
     let line2 = next_line(&rx, Duration::from_secs(5)).expect("second response");
     assert!(line2.contains("\"type\":\"error\""), "got: {line2}");
     assert!(line2.contains("\"id\":\"after-bad\""), "got: {line2}");
@@ -244,8 +247,8 @@ fn eof_on_stdin_terminates_the_process_without_an_explicit_shutdown() {
     // Drop stdin immediately to signal EOF.
     drop(child.stdin.take());
 
-    let status = wait_with_timeout(&mut child, Duration::from_secs(5))
-        .expect("child should exit on EOF");
+    let status =
+        wait_with_timeout(&mut child, Duration::from_secs(5)).expect("child should exit on EOF");
     assert!(status.success(), "exit status: {status:?}");
 }
 
@@ -257,11 +260,7 @@ fn requests_are_processed_in_order_each_carrying_its_own_id() {
 
     let mut stdin = child.stdin.take().expect("stdin");
     for id in ["a", "b", "c"] {
-        writeln!(
-            stdin,
-            r#"{{"type":"embed","id":"{id}","text":"x"}}"#
-        )
-        .expect("write embed");
+        writeln!(stdin, r#"{{"type":"embed","id":"{id}","text":"x"}}"#).expect("write embed");
     }
 
     // Expect three error events (model not loaded), in order.
@@ -276,7 +275,11 @@ fn requests_are_processed_in_order_each_carrying_its_own_id() {
             }
         }
     }
-    assert_eq!(seen, vec!["a", "b", "c"], "responses should preserve request order");
+    assert_eq!(
+        seen,
+        vec!["a", "b", "c"],
+        "responses should preserve request order"
+    );
 
     writeln!(stdin, r#"{{"type":"shutdown"}}"#).expect("shutdown");
     drop(stdin);
@@ -338,7 +341,10 @@ fn e2e_init_then_embed_returns_normalized_vector() {
         })
         .sum::<f64>()
         .sqrt();
-    assert!((norm - 1.0).abs() < 1e-3, "L2 norm should be ~1.0, got {norm}");
+    assert!(
+        (norm - 1.0).abs() < 1e-3,
+        "L2 norm should be ~1.0, got {norm}"
+    );
 
     writeln!(stdin, r#"{{"type":"shutdown"}}"#).expect("shutdown");
     drop(stdin);
@@ -416,11 +422,7 @@ fn e2e_unknown_model_emits_an_error_not_a_ready() {
     assert!(err.contains("embedding model failed"), "got: {err}");
 
     // After the failure the worker remains in "no model loaded" state.
-    writeln!(
-        stdin,
-        r#"{{"type":"embed","id":"after","text":"hi"}}"#
-    )
-    .expect("embed");
+    writeln!(stdin, r#"{{"type":"embed","id":"after","text":"hi"}}"#).expect("embed");
     let line = next_line_matching(&rx, Duration::from_secs(5), |line| {
         line.contains("\"type\":\"error\"") && line.contains("\"id\":\"after\"")
     })

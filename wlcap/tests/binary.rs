@@ -22,9 +22,7 @@ fn bin() -> &'static str {
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn non_linux_stub_exits_with_code_2_and_prints_marker() {
-    let output = Command::new(bin())
-        .output()
-        .expect("spawn hpm-wlcap");
+    let output = Command::new(bin()).output().expect("spawn hpm-wlcap");
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -106,9 +104,7 @@ mod linux_smoke {
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => return Some(status),
-                Ok(None) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(20))
-                }
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
                 Ok(None) => return None,
                 Err(_) => return None,
             }

@@ -353,14 +353,14 @@ mod tests {
     //! length, magnitudes, and that splitting a signal across packet
     //! boundaries produces the same result as a single push.
     use super::{to_i16, Resampler};
+    use std::assert;
+    use std::assert_eq;
     use std::f32::consts::PI;
     use std::f64::consts::PI as PI64;
     use std::i16;
-    use std::vec::Vec;
-    use std::vec;
-    use std::assert;
-    use std::assert_eq;
     use std::iter::Iterator;
+    use std::vec;
+    use std::vec::Vec;
 
     fn drain(resampler: &mut Resampler, src: &[f32]) -> Vec<i16> {
         let mut out = Vec::new();
@@ -392,7 +392,11 @@ mod tests {
         let mut r = Resampler::new(48_000, 16_000);
         let mut out = vec![i16::MIN, i16::MAX]; // sentinel; should not be touched.
         r.push(&[], &mut out);
-        assert_eq!(out, vec![i16::MIN, i16::MAX], "out buffer must be untouched");
+        assert_eq!(
+            out,
+            vec![i16::MIN, i16::MAX],
+            "out buffer must be untouched"
+        );
     }
 
     #[test]
@@ -542,10 +546,12 @@ mod tests {
         // Alternating +/- max in a high-frequency signal box-averages to ~0
         // (the source's mean over each downsampling window).
         let mut r = Resampler::new(48_000, 16_000); // ratio = 3
-        // 6 samples of alternating ±1 → two windows of 3 samples each.
-        // Window 1: avg(1, -1, 1) = 1/3 → ~10923
-        // Window 2: avg(-1, 1, -1) = -1/3 → ~-10923
-        let src: Vec<f32> = (0..6).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+                                                    // 6 samples of alternating ±1 → two windows of 3 samples each.
+                                                    // Window 1: avg(1, -1, 1) = 1/3 → ~10923
+                                                    // Window 2: avg(-1, 1, -1) = -1/3 → ~-10923
+        let src: Vec<f32> = (0..6)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
         let out = drain(&mut r, &src);
         assert_eq!(out.len(), 2, "expected 2 output samples for 6 src @ 3:1");
         let want_pos = to_i16(1.0 / 3.0);
@@ -642,7 +648,11 @@ mod tests {
         let big = vec![5.0_f32; 32];
         let out_up = drain(&mut up, &big);
         for (i, &s) in out_up.iter().enumerate() {
-            assert_eq!(s, i16::MAX, "upsample sample {i}: positive over-amplitude not clamped");
+            assert_eq!(
+                s,
+                i16::MAX,
+                "upsample sample {i}: positive over-amplitude not clamped"
+            );
         }
 
         let mut down = Resampler::new(48_000, 16_000);
@@ -653,7 +663,10 @@ mod tests {
         // implementation multiplies the clamped value by i16::MAX.
         let want = -i16::MAX;
         for (i, &s) in out_down.iter().enumerate() {
-            assert_eq!(s, want, "downsample sample {i}: negative over-amplitude not clamped");
+            assert_eq!(
+                s, want,
+                "downsample sample {i}: negative over-amplitude not clamped"
+            );
         }
     }
 
