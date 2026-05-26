@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUIDv7 } from 'bun'
 import { openChunkStore } from '../../store/db'
-import { RRF_K0, rrfFuse } from './index'
-import { HyprmnesiaReadStore, ReadStoreError } from './index'
+import { HyprmnesiaReadStore, ReadStoreError, RRF_K0, rrfFuse } from './index'
 import type { SearchResult } from './types'
 
 // ---- Pure unit tests for the Reciprocal Rank Fusion arithmetic ------------

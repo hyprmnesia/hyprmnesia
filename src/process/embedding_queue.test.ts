@@ -6,7 +6,7 @@
 // fast and don't depend on sqlite-vec or the ONNX sidecar.
 
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { EventBus, type CaptureEvent, type Source } from '../core/events'
+import { type CaptureEvent, EventBus, type Source } from '../core/events'
 import type { ChunkStore, EmbeddingKind, PendingEmbedding } from '../store/db'
 import { EmbeddingQueue } from './embedding_queue'
 import type {
@@ -87,9 +87,7 @@ interface FakeEngine extends EmbeddingEngine {
 function makeEngine(opts: FakeEngineOptions = {}): FakeEngine {
   let callbacks: EmbeddingCallbacks | undefined
   const handlers = opts.embedHandlers ? [...opts.embedHandlers] : []
-  const defaultHandler = async (
-    requests: EmbeddingRequest[],
-  ): Promise<EmbeddingResult[]> =>
+  const defaultHandler = async (requests: EmbeddingRequest[]): Promise<EmbeddingResult[]> =>
     requests.map((r) => ({ id: r.id, kind: r.kind, vector: new Float32Array([0.1, 0.2, 0.3]) }))
   const engine: FakeEngine = {
     name: 'fake',
@@ -305,15 +303,15 @@ test('engine.embed() failure is caught, logged, and stop() still resolves cleanl
   await queue.start()
   // Wait until the embed call has been attempted and the catch has run.
   await waitFor(() => {
-    return collectedEvents.some(
-      (e) => e.type === 'log' && /embedding drain failed/.test(e.message),
-    )
+    return collectedEvents.some((e) => e.type === 'log' && /embedding drain failed/.test(e.message))
   }, 'error log emitted')
   // No vectors were written; the loop is still alive and can be stopped.
   expect(store.embeddings).toHaveLength(0)
   await Promise.race([
     queue.stop(),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('stop() hung after error')), 2_000)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('stop() hung after error')), 2_000),
+    ),
   ])
   expect(engine.stopCalls).toBe(1)
 })
@@ -390,8 +388,7 @@ test('engine status callbacks are republished as embedding_status events', async
   await queue.stop()
 
   const status = collectedEvents.find(
-    (e): e is Extract<CaptureEvent, { type: 'embedding_status' }> =>
-      e.type === 'embedding_status',
+    (e): e is Extract<CaptureEvent, { type: 'embedding_status' }> => e.type === 'embedding_status',
   )
   expect(status).toBeDefined()
   expect(status?.status).toBe('ready')

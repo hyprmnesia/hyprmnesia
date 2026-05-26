@@ -310,9 +310,7 @@ test('unwindowed audio attaches to an overlapping screen group', () => {
 })
 
 test('unwindowed audio with no overlapping screen group creates its own audio:mic group', () => {
-  const rows = [
-    chunk({ id: 'mic-1', at: T, kind: 'audio_mic', start_at: T, end_at: T + 1_000 }),
-  ]
+  const rows = [chunk({ id: 'mic-1', at: T, kind: 'audio_mic', start_at: T, end_at: T + 1_000 })]
   const groups = buildActivityGroups(rows)
   expect(groups).toHaveLength(1)
   expect(groups[0]?.sources).toEqual(['mic'])

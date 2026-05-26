@@ -8,10 +8,10 @@
 // `audioState` is private; we exercise it through `toTimelineItem` which is
 // where it actually runs in production.
 
+import { expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, expect, test } from 'bun:test'
 import {
   chunkSource,
   excerpt,
@@ -264,18 +264,12 @@ test('audioState: text present → transcribed (even with zero segments)', () =>
 })
 
 test('audioState: still open (end_at = null) → recording', () => {
-  const item = toTimelineItem(
-    audioRow({ id: 'm1', at: 1_000, kind: 'audio_mic', end_at: null }),
-    0,
-  )
+  const item = toTimelineItem(audioRow({ id: 'm1', at: 1_000, kind: 'audio_mic', end_at: null }), 0)
   expect(item.audio?.state).toBe('recording')
 })
 
 test('audioState: zero bytes → recording (even with end_at set)', () => {
-  const item = toTimelineItem(
-    audioRow({ id: 'm1', at: 1_000, kind: 'audio_mic', bytes: 0 }),
-    0,
-  )
+  const item = toTimelineItem(audioRow({ id: 'm1', at: 1_000, kind: 'audio_mic', bytes: 0 }), 0)
   expect(item.audio?.state).toBe('recording')
 })
 
@@ -364,9 +358,7 @@ test('toTimelineItem: duration_ms is end - start, clamped to ≥ 0', () => {
 })
 
 test('toTimelineItem: end_at=null → duration_ms=null', () => {
-  const item = toTimelineItem(
-    audioRow({ id: 'm1', at: 1_000, kind: 'audio_mic', end_at: null }),
-  )
+  const item = toTimelineItem(audioRow({ id: 'm1', at: 1_000, kind: 'audio_mic', end_at: null }))
   expect(item.duration_ms).toBeNull()
 })
 

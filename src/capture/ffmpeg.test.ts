@@ -9,12 +9,7 @@
 
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import {
-  ffmpegSearchPaths,
-  getFfmpegPath,
-  needsImageTranscode,
-  transcodeImage,
-} from './ffmpeg'
+import { ffmpegSearchPaths, getFfmpegPath, needsImageTranscode, transcodeImage } from './ffmpeg'
 
 // ---- ffmpegSearchPaths: pure path-resolution priority --------------------
 
@@ -120,17 +115,7 @@ async function synthPng(
 // stderr is more universal than depending on ffprobe being available.
 async function probeDimensions(image: Buffer): Promise<{ width: number; height: number }> {
   const proc = Bun.spawn(
-    [
-      getFfmpegPath(),
-      '-hide_banner',
-      '-loglevel',
-      'info',
-      '-i',
-      'pipe:0',
-      '-f',
-      'null',
-      '-',
-    ],
+    [getFfmpegPath(), '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0', '-f', 'null', '-'],
     { stdin: image, stdout: 'pipe', stderr: 'pipe', windowsHide: true },
   )
   await proc.exited
@@ -157,7 +142,13 @@ function pngMagic(buf: Buffer): boolean {
 
 function jpegMagic(buf: Buffer): boolean {
   // FFD8 ... FFD9
-  return buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8 && buf[buf.length - 2] === 0xff && buf[buf.length - 1] === 0xd9
+  return (
+    buf.length >= 4 &&
+    buf[0] === 0xff &&
+    buf[1] === 0xd8 &&
+    buf[buf.length - 2] === 0xff &&
+    buf[buf.length - 1] === 0xd9
+  )
 }
 
 describe.if(ffmpegAvailable)('transcodeImage (with ffmpeg)', () => {
