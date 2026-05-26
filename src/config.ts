@@ -8,12 +8,23 @@ export interface ScreenCaptureConfig {
   interval_ms: number
   monitor: 'primary' | 'all' | number
   format: 'png' | 'jpg'
+  // JPEG quality (1-100). Ignored when format is png.
+  quality: number
+  // Downscale captures to fit this width in pixels; 0 keeps native resolution.
+  max_width: number
 }
+
+type SystemAudioBackend = 'auto' | 'wasapi' | 'dshow'
 
 export interface AudioStreamConfig {
   enabled: boolean
   device: string
   chunk_ms: number
+  // Only meaningful for the system stream on Windows. Selects how system audio
+  // is captured: 'auto' prefers the WASAPI loopback helper (keeps capturing
+  // when output is muted) and falls back to DirectShow; 'dshow' forces the
+  // legacy virtual-audio-capturer path.
+  backend?: SystemAudioBackend
 }
 
 export interface AudioCaptureConfig {
@@ -47,6 +58,7 @@ export interface Config {
   processing: {
     ocr: EngineConfig
     transcription: EngineConfig
+    embeddings: EngineConfig
   }
   storage: {
     path: string
@@ -61,6 +73,8 @@ const defaultConfig: Config = {
       interval_ms: 5000,
       monitor: 'primary',
       format: 'png',
+      quality: 80,
+      max_width: 0,
     },
     audio: {
       sample_rate: 16000,
@@ -71,7 +85,7 @@ const defaultConfig: Config = {
         hold_ms: 500,
       },
       mic: { enabled: true, device: 'default', chunk_ms: 5000 },
-      system: { enabled: true, device: 'default', chunk_ms: 5000 },
+      system: { enabled: true, device: 'default', chunk_ms: 5000, backend: 'auto' },
     },
   },
   processing: {
@@ -90,6 +104,15 @@ const defaultConfig: Config = {
         },
       },
     },
+    embeddings: {
+      engine: 'local',
+      options: {
+        model: 'multilingual-e5-small',
+        dim: 384,
+        batch_size: 16,
+        sources: ['screen', 'mic', 'system'],
+      },
+    },
   },
   storage: {
     path: '~/.hyprmnesia/data',
@@ -106,6 +129,10 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]>
 const DEFAULT_PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3'
 const LEGACY_TRANSCRIPTION_ENGINES = new Set(['auto', 'whisper'])
 const SUPPORTED_TRANSCRIPTION_ENGINES = new Set(['parakeet', 'noop'])
+
+const DEFAULT_EMBEDDING_MODEL = 'multilingual-e5-small'
+const DEFAULT_EMBEDDING_DIM = 384
+const SUPPORTED_EMBEDDING_ENGINES = new Set(['local', 'noop'])
 
 function deepMerge<T>(base: T, override: DeepPartial<T>): T {
   if (override === null || override === undefined) return base
@@ -140,6 +167,13 @@ function loadMergedConfig(path?: string): Config {
 }
 
 function normalizeConfig(config: Config): Config {
+  const screen = config.capture.screen
+  if (screen.format !== 'png' && screen.format !== 'jpg') screen.format = 'png'
+  if (!Number.isFinite(screen.quality)) screen.quality = defaultConfig.capture.screen.quality
+  screen.quality = Math.max(1, Math.min(100, Math.trunc(screen.quality)))
+  if (!Number.isFinite(screen.max_width) || screen.max_width < 0) screen.max_width = 0
+  screen.max_width = Math.trunc(screen.max_width)
+
   const tx = config.processing.transcription
   if (LEGACY_TRANSCRIPTION_ENGINES.has(tx.engine)) tx.engine = 'parakeet'
   if (!SUPPORTED_TRANSCRIPTION_ENGINES.has(tx.engine)) tx.engine = 'parakeet'
@@ -154,6 +188,19 @@ function normalizeConfig(config: Config): Config {
       >,
     )
   }
+  const emb = config.processing.embeddings
+  if (!emb || typeof emb !== 'object') {
+    config.processing.embeddings = deepMerge(defaultConfig.processing.embeddings, {})
+  } else {
+    if (!SUPPORTED_EMBEDDING_ENGINES.has(emb.engine)) emb.engine = 'local'
+    if (emb.engine === 'local') {
+      emb.options ??= {}
+      // v1 locks the model/dim pair; the vec0 schema is built for 384 dims.
+      emb.options.model = DEFAULT_EMBEDDING_MODEL
+      emb.options.dim = DEFAULT_EMBEDDING_DIM
+    }
+  }
+
   if (config.mcp.transport !== 'stdio' && config.mcp.transport !== 'http')
     config.mcp.transport = 'stdio'
   if (typeof config.mcp.bind !== 'string' || config.mcp.bind.trim() === '')

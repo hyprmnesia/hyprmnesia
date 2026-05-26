@@ -19,10 +19,10 @@ Tracked in GitHub issues, roughly ordered by priority.
 - [ ] [#12](https://github.com/hyprmnesia/hyprmnesia/issues/12) — encryption at rest for captured blobs and the index DB (chunked AEAD + SQLCipher, keys in OS keychain)
 - [ ] [#6](https://github.com/hyprmnesia/hyprmnesia/issues/6) — protect read-only MCP access with a local auth token stored in the OS keychain
 - [ ] [#13](https://github.com/hyprmnesia/hyprmnesia/issues/13) — code signing and notarization for Windows, macOS, and Linux installers
-- [ ] [#7](https://github.com/hyprmnesia/hyprmnesia/issues/7) — Windows: keep system-audio capture working when the output is muted (WASAPI loopback / virtual sink)
+- [x] [#7](https://github.com/hyprmnesia/hyprmnesia/issues/7) — Windows: keep system-audio capture working when the output is muted (WASAPI loopback via `hpm-wasapi`, with DirectShow fallback)
 - [ ] [#8](https://github.com/hyprmnesia/hyprmnesia/issues/8) — Linux: screen capture on Wayland (GNOME, KDE, wlroots) via xdg-desktop-portal / PipeWire
-- [ ] [#10](https://github.com/hyprmnesia/hyprmnesia/issues/10) — quick toggle to switch screen, mic, or system recording on/off
-- [ ] [#4](https://github.com/hyprmnesia/hyprmnesia/issues/4) — configurable capture quality (resolution, format, audio bitrate)
+- [x] [#10](https://github.com/hyprmnesia/hyprmnesia/issues/10) — quick toggle to switch screen, mic, or system recording on/off
+- [x] [#4](https://github.com/hyprmnesia/hyprmnesia/issues/4) — configurable capture quality (resolution, format, audio bitrate)
 - [ ] [#11](https://github.com/hyprmnesia/hyprmnesia/issues/11) — semantic search over captures via local embeddings, hybrid with FTS5
 
 ## Contents
@@ -53,6 +53,19 @@ Tracked in GitHub issues, roughly ordered by priority.
   stored on both screenshots and audio chunks
 
 ## Quickstart
+
+On Debian/Ubuntu, install the native Linux capture dependencies first:
+
+```sh
+sudo apt install -y \
+  libxdo-dev \
+  imagemagick \
+  ffmpeg \
+  libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-tools \
+  gstreamer1.0-plugins-base
+```
 
 ```sh
 git clone https://github.com/hyprmnesia/hyprmnesia.git
@@ -231,6 +244,9 @@ one running daemon instead of spawning duplicates.
 | Key | Action |
 | --- | --- |
 | `x` | start the daemon if stopped, stop it if running |
+| `s` | toggle screen capture on/off (saves config, restarts daemon if running) |
+| `m` | toggle microphone capture on/off |
+| `y` | toggle system-audio capture on/off |
 | `r` | refresh status |
 | `c` | open settings |
 | `l` | open/close readable logs |
@@ -257,6 +273,8 @@ In Settings:
 --config <path>           config file, default ~/.hyprmnesia/config.yaml
 --data-dir <path>         where to store blobs and the index
 --screen-interval <ms>    screen capture interval
+--screen-quality <n>      JPEG quality 1-100 (jpg format only)
+--screen-max-width <n>    downscale captures to fit width in px (0 = native)
 --audio-chunk <ms>        chunk duration for mic and system audio
 --mic-device <name>       override mic device
 --system-device <name>    override system audio device
@@ -279,6 +297,8 @@ capture:
     interval_ms: 5000
     monitor: primary
     format: png
+    quality: 80      # JPEG quality 1-100 (ignored for png)
+    max_width: 0     # downscale to fit width in px; 0 keeps native resolution
   audio:
     sample_rate: 16000
     echo_suppression:
@@ -310,6 +330,13 @@ processing:
         max_segment_ms: 6000
         silence_ms: 700
         rms_gate: 0.003
+  embeddings:
+    engine: local
+    options:
+      model: multilingual-e5-small
+      dim: 384
+      batch_size: 16
+      sources: [screen, mic, system]
 storage:
   path: ~/.hyprmnesia/data
 mcp:
@@ -319,12 +346,26 @@ mcp:
 ```
 
 OCR engines: `auto`, `native`, `tesseract`, `noop`.
+On Windows, `auto` uses the bundled native OCR helper. On macOS/Linux, install
+Tesseract (`brew install tesseract` or `apt install tesseract-ocr`); if it lives
+outside PATH and common package-manager locations, set
+`processing.ocr.options.binary` to the absolute binary path.
 Transcription engines: `parakeet`, `noop`. Old `auto` / `whisper` configs are
 treated as Parakeet for compatibility; `whisper-cli` is no longer used in the
 normal runtime path.
 Parakeet model: `parakeet-tdt-0.6b-v3`. The ASR helper auto-downloads the model
 to the Hugging Face cache on first use; capture continues while it is loading,
 but audio recorded before the model is ready is not transcribed.
+
+Embedding engines: `local`, `noop`. When `local`, the `hpm-embed` helper computes
+sentence embeddings for OCR text and transcript segments locally (model
+auto-downloaded to the Hugging Face cache) and stores them via the `sqlite-vec`
+extension alongside the FTS5 index. The MCP `search` tool then accepts a `mode`
+argument — `lexical`, `semantic`, or `hybrid` (default). Hybrid fuses BM25 and
+vector similarity with Reciprocal Rank Fusion; search transparently falls back to
+lexical FTS5 when the embedding worker or vector index is unavailable. `sources`
+selects which capture kinds are embedded (`screen` = OCR text, `mic`/`system` =
+transcript segments).
 
 `capture.audio.echo_suppression` is a transcript guard for speaker bleed: when
 system audio is active, mic frames are only sent to ASR if the mic is clearly
@@ -370,7 +411,7 @@ hpm
     |-- hpm _capture
     |-- Orchestrator -> EventBus -> captures
         |-- screen (screenshot-desktop; hpm-sck on macOS)
-        |-- audio  (ffmpeg mic; hpm-sck system audio on macOS)
+        |-- audio  (ffmpeg mic; hpm-sck system audio on macOS; hpm-wasapi loopback on Windows)
         |          -> PCM stream -> hpm-asr Parakeet worker
         |-- active window
         `-- blob store / index
@@ -386,7 +427,7 @@ logs.
 | -------------- | -------------------------------------- | -------------------------------------- | ----------------------------- |
 | Screen capture | OK                                     | OK (ScreenCaptureKit, macOS 13+)       | OK (X11), Wayland TBD         |
 | Mic            | OK (dshow)                             | OK (avfoundation)                      | OK (pulse)                    |
-| System audio   | needs Screen Capturer Recorder         | OK (ScreenCaptureKit, no driver)       | `@DEFAULT_MONITOR@` via pulse |
+| System audio   | OK (WASAPI loopback, survives mute; dshow fallback) | OK (ScreenCaptureKit, no driver)       | `@DEFAULT_MONITOR@` via pulse |
 | Window context | OK                                     | OK + URL                               | OK on X11, none on Wayland    |
 
 See the [installation guide](docs/install.md) for the exact setup steps per OS.

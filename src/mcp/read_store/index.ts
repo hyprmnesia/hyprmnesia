@@ -1,7 +1,15 @@
 import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
+import { loadVecExtension, serializeVector } from '../../store/vec'
 import { buildActivityGroups } from './activity'
-import { buildFtsQuery, clampLimit, clampOffset, normalizeSource, ReadStoreError } from './filters'
+import {
+  buildFtsQuery,
+  clampLimit,
+  clampOffset,
+  normalizeMode,
+  normalizeSource,
+  ReadStoreError,
+} from './filters'
 import {
   chunkSource,
   excerpt,
@@ -23,6 +31,7 @@ import type {
   SearchChunkRow,
   SearchResult,
   SearchSegmentRow,
+  SearchVecRow,
   SegmentResult,
   SegmentRow,
   TimelineItem,
@@ -31,6 +40,7 @@ import type {
 export {
   clampLimit,
   clampOffset,
+  normalizeMode,
   normalizeSource,
   normalizeSources,
   parseTimestamp,
@@ -48,6 +58,9 @@ export type {
 
 export class HyprmnesiaReadStore {
   private db: Database
+  // True when sqlite-vec loaded and the v3 vector tables exist. Vector search
+  // silently falls back to FTS5 when false.
+  readonly vecReady: boolean
 
   constructor(readonly dbPath: string) {
     if (!existsSync(dbPath)) {
@@ -62,6 +75,7 @@ export class HyprmnesiaReadStore {
       if (version < 2) {
         throw new ReadStoreError(`index database schema is v${version}; MCP requires v2 or newer`)
       }
+      this.vecReady = version >= 3 && loadVecExtension(this.db)
     } catch (err) {
       if (err instanceof ReadStoreError) throw err
       throw new ReadStoreError(`failed to open read-only index database: ${String(err)}`)
@@ -73,10 +87,31 @@ export class HyprmnesiaReadStore {
   }
 
   search(query: string, filters: QueryFilters): SearchResult[] {
-    const fts = buildFtsQuery(query)
+    const mode = normalizeMode(filters.mode)
     const limit = clampLimit(filters.limit)
     const offset = clampOffset(filters.offset)
     const innerLimit = limit + offset
+    const useVec = mode !== 'lexical' && this.vecReady && filters.queryVector !== undefined
+
+    // semantic: vectors only, but fall back to FTS5 when the index/embedder
+    // isn't ready so the tool never returns empty for a valid query.
+    if (mode === 'semantic') {
+      const results = useVec
+        ? this.vectorResults(filters, innerLimit)
+        : this.ftsResults(query, filters, innerLimit)
+      return results.slice(offset, offset + limit)
+    }
+
+    const fts = this.ftsResults(query, filters, innerLimit)
+    if (!useVec) return fts.slice(offset, offset + limit)
+
+    // hybrid: fuse FTS5 (BM25) and vector rankings with Reciprocal Rank Fusion.
+    const vec = this.vectorResults(filters, innerLimit)
+    return this.fuse(fts, vec, limit, offset)
+  }
+
+  private ftsResults(query: string, filters: QueryFilters, innerLimit: number): SearchResult[] {
+    const fts = buildFtsQuery(query)
     const source = normalizeSource(filters.source)
     const params = {
       $query: fts,
@@ -136,45 +171,146 @@ export class HyprmnesiaReadStore {
             .all(params)
 
     const out: SearchResult[] = [
-      ...segments.map((row) => ({
-        id: row.id,
-        type: 'transcript_segment' as const,
-        source: row.source,
-        time: row.start_at,
-        timezone: LOCAL_TIMEZONE,
-        local_time: localIso(row.start_at)!,
-        utc_time: iso(row.start_at)!,
-        iso_time: iso(row.start_at)!,
-        end_time: row.end_at,
-        local_end_time: localIso(row.end_at),
-        utc_end_time: iso(row.end_at),
-        iso_end_time: iso(row.end_at),
-        snippet: excerpt(row.snippet || row.text),
-        score: row.score,
-        chunk_id: row.chunk_id,
-        window: windowFromRow(row),
-      })),
-      ...chunks.map((row) => ({
-        id: row.id,
-        type: 'chunk' as const,
-        source: chunkSource(row.kind),
-        time: row.at,
-        timezone: LOCAL_TIMEZONE,
-        local_time: localIso(row.at)!,
-        utc_time: iso(row.at)!,
-        iso_time: iso(row.at)!,
-        end_time: row.end_at,
-        local_end_time: localIso(row.end_at),
-        utc_end_time: iso(row.end_at),
-        iso_end_time: iso(row.end_at),
-        snippet: excerpt(row.snippet || row.text),
-        score: row.score,
-        chunk_id: row.id,
-        window: windowFromRow(row),
-      })),
+      ...segments.map((row) =>
+        this.segmentResult(row, excerpt(row.snippet || row.text), row.score),
+      ),
+      ...chunks.map((row) => this.chunkResult(row, excerpt(row.snippet || row.text), row.score)),
     ]
+    return out.sort((a, b) => a.score - b.score || b.time - a.time)
+  }
 
-    return out.sort((a, b) => a.score - b.score || b.time - a.time).slice(offset, offset + limit)
+  private vectorResults(filters: QueryFilters, innerLimit: number): SearchResult[] {
+    const vector = filters.queryVector
+    if (!vector) return []
+    const source = normalizeSource(filters.source)
+    // KNN drops rows the post-filters reject, so over-fetch then trim.
+    const k = Math.max(innerLimit * 5, 50)
+    const params = {
+      $qvec: serializeVector(vector),
+      $k: k,
+      $from: filters.from ?? null,
+      $to: filters.to ?? null,
+      $kind: kindForSource(source) ?? null,
+      $segment_source: source === 'screen' ? '__none__' : (source ?? null),
+      $app: filters.app ? `%${filters.app}%` : null,
+    }
+
+    const segments =
+      source === 'screen'
+        ? []
+        : this.db
+            .query<SearchSegmentRow & SearchVecRow, typeof params>(
+              `
+              SELECT s.*,
+                     c.window_app, c.window_title, c.window_url, c.window_pid,
+                     v.distance AS distance
+              FROM transcript_segment_vec v
+              JOIN transcript_segments s ON s.id = v.segment_id
+              JOIN chunks c ON c.id = s.chunk_id
+              WHERE v.embedding MATCH $qvec AND k = $k
+                AND ($from IS NULL OR s.start_at >= $from)
+                AND ($to IS NULL OR s.start_at <= $to)
+                AND ($segment_source IS NULL OR s.source = $segment_source)
+                AND ($app IS NULL OR c.window_app LIKE $app)
+              ORDER BY v.distance
+            `,
+            )
+            .all(params)
+
+    const chunks =
+      source === 'mic' || source === 'system'
+        ? []
+        : this.db
+            .query<SearchChunkRow & SearchVecRow, typeof params>(
+              `
+              SELECT c.*, v.distance AS distance
+              FROM chunk_vec v
+              JOIN chunks c ON c.id = v.chunk_id
+              WHERE v.embedding MATCH $qvec AND k = $k
+                AND ($from IS NULL OR c.at >= $from)
+                AND ($to IS NULL OR c.at <= $to)
+                AND ($kind IS NULL OR c.kind = $kind)
+                AND ($app IS NULL OR c.window_app LIKE $app)
+              ORDER BY v.distance
+            `,
+            )
+            .all(params)
+
+    const out: SearchResult[] = [
+      ...segments.map((row) => this.segmentResult(row, excerpt(row.text), row.distance)),
+      ...chunks.map((row) => this.chunkResult(row, excerpt(row.text), row.distance)),
+    ]
+    // distance: lower is closer.
+    return out.sort((a, b) => a.score - b.score || b.time - a.time)
+  }
+
+  // Reciprocal Rank Fusion: score = Σ 1/(k0 + rank). Higher is better, so the
+  // returned `score` semantics differ from BM25 (lower-is-better) on purpose.
+  private fuse(
+    fts: SearchResult[],
+    vec: SearchResult[],
+    limit: number,
+    offset: number,
+  ): SearchResult[] {
+    const k0 = 60
+    const fused = new Map<string, { result: SearchResult; rrf: number }>()
+    const add = (list: SearchResult[]) => {
+      list.forEach((result, index) => {
+        const key = `${result.type}:${result.id}`
+        const contribution = 1 / (k0 + index + 1)
+        const existing = fused.get(key)
+        if (existing) existing.rrf += contribution
+        else fused.set(key, { result, rrf: contribution })
+      })
+    }
+    add(fts)
+    add(vec)
+    return [...fused.values()]
+      .sort((a, b) => b.rrf - a.rrf || b.result.time - a.result.time)
+      .slice(offset, offset + limit)
+      .map((entry) => ({ ...entry.result, score: entry.rrf }))
+  }
+
+  private segmentResult(row: SearchSegmentRow, snippet: string, score: number): SearchResult {
+    return {
+      id: row.id,
+      type: 'transcript_segment',
+      source: row.source,
+      time: row.start_at,
+      timezone: LOCAL_TIMEZONE,
+      local_time: localIso(row.start_at)!,
+      utc_time: iso(row.start_at)!,
+      iso_time: iso(row.start_at)!,
+      end_time: row.end_at,
+      local_end_time: localIso(row.end_at),
+      utc_end_time: iso(row.end_at),
+      iso_end_time: iso(row.end_at),
+      snippet,
+      score,
+      chunk_id: row.chunk_id,
+      window: windowFromRow(row),
+    }
+  }
+
+  private chunkResult(row: SearchChunkRow, snippet: string, score: number): SearchResult {
+    return {
+      id: row.id,
+      type: 'chunk',
+      source: chunkSource(row.kind),
+      time: row.at,
+      timezone: LOCAL_TIMEZONE,
+      local_time: localIso(row.at)!,
+      utc_time: iso(row.at)!,
+      iso_time: iso(row.at)!,
+      end_time: row.end_at,
+      local_end_time: localIso(row.end_at),
+      utc_end_time: iso(row.end_at),
+      iso_end_time: iso(row.end_at),
+      snippet,
+      score,
+      chunk_id: row.id,
+      window: windowFromRow(row),
+    }
   }
 
   timeline(filters: QueryFilters & { from: number; to: number }): TimelineItem[] {

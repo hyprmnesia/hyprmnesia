@@ -13,3 +13,4 @@ export const defaultConfigPath = () => join(homedir(), '.hyprmnesia', 'config.ya
 export const legacyConfigPath = () => join(homedir(), '.hyprmnesia', 'config.json')
 const _enginesDir = () => join(homedir(), '.hyprmnesia', 'engines')
 export const defaultDbPath = () => join(homedir(), '.hyprmnesia', 'index.db')
+export const defaultWaylandTokenPath = () => join(homedir(), '.hyprmnesia', 'wayland-portal-token')

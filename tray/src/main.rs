@@ -10,7 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tao::event::{Event, StartCause};
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder};
+#[cfg(target_os = "macos")]
+use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder,
@@ -33,6 +35,7 @@ impl TrayState {
 }
 
 const APP_NAME: &str = "Hyprmnesia";
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 const STARTUP_NAME: &str = "Hyprmnesia Tray";
 const REFRESH_EVERY: Duration = Duration::from_secs(2);
 
@@ -91,8 +94,10 @@ fn main() {
         Ok(paths) => paths,
         Err(_) => return,
     };
+    configure_notification_application();
 
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    configure_event_loop(&mut event_loop);
     let proxy = event_loop.create_proxy();
     // tray-icon menu callbacks arrive outside tao's event loop, so bounce them
     // through a user event and keep all menu state changes on one thread.
@@ -170,6 +175,27 @@ fn main() {
         }
     });
 }
+
+#[cfg(target_os = "macos")]
+fn configure_event_loop<T>(event_loop: &mut EventLoop<T>) {
+    event_loop.set_activation_policy(ActivationPolicy::Accessory);
+    event_loop.set_dock_visibility(false);
+    event_loop.set_activate_ignoring_other_apps(false);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_event_loop<T>(_: &mut EventLoop<T>) {}
+
+#[cfg(target_os = "macos")]
+fn configure_notification_application() {
+    // notify-rust's macOS default asks AppleScript for an app named
+    // "use_default", which opens a "Choose Application" dialog. Set a known
+    // system bundle id up front so the first daemon transition notification is quiet.
+    let _ = notify_rust::set_application("com.apple.finder");
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_notification_application() {}
 
 fn build_menu() -> (Menu, TrayMenu) {
     let menu = Menu::new();
@@ -563,11 +589,17 @@ fn resolve_paths() -> io::Result<AppPaths> {
 fn hpm_candidates(tray_dir: &Path) -> Vec<PathBuf> {
     let hpm = executable_name("hpm");
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    vec![
-        tray_dir.join(&hpm),
-        cwd.join("dist").join(&hpm),
-        cwd.join(&hpm),
-    ]
+    let mut candidates = vec![tray_dir.join(&hpm)];
+    // Packaged installs place the tray in `<install>/native/` and the CLI in
+    // `<install>/hpm`, so the sibling-of-parent path is the only candidate that
+    // resolves at Windows boot, where the Run key launches the tray with the
+    // working directory set to system32 rather than the install dir.
+    if let Some(parent) = tray_dir.parent() {
+        candidates.push(parent.join(&hpm));
+    }
+    candidates.push(cwd.join("dist").join(&hpm));
+    candidates.push(cwd.join(&hpm));
+    candidates
 }
 
 fn executable_name(base: &str) -> String {
@@ -622,7 +654,7 @@ fn open_path(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn command_exists(program: &str) -> bool {
     env::var_os("PATH")
         .is_some_and(|paths| env::split_paths(&paths).any(|dir| dir.join(program).exists()))
@@ -781,4 +813,31 @@ fn xml_escape(value: &str) -> String {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn candidates_include_parent_for_packaged_layout() {
+        // Packaged installs put the tray in `<install>/native/` and the CLI in
+        // `<install>/hpm`; without the parent candidate the tray cannot find hpm
+        // when launched at boot with an unrelated working directory.
+        let tray_dir = Path::new("/opt/hyprmnesia/native");
+        let expected = tray_dir.parent().unwrap().join(executable_name("hpm"));
+        assert!(hpm_candidates(tray_dir).contains(&expected));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn candidates_include_parent_for_windows_install() {
+        // MSI installs land under %LOCALAPPDATA%\Programs\Hyprmnesia\native; at
+        // boot the Run key launches the tray with cwd = system32, so the
+        // sibling-of-parent candidate is the only one that resolves.
+        let tray_dir = Path::new(r"C:\Users\Test\AppData\Local\Programs\Hyprmnesia\native");
+        let expected = tray_dir.parent().unwrap().join("hpm.exe");
+        assert!(hpm_candidates(tray_dir).contains(&expected));
+    }
 }

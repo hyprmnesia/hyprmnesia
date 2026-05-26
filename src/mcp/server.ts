@@ -1,9 +1,13 @@
+import { loadConfig } from '../config'
+import { makeEmbedding } from '../process/embeddings'
+import type { EmbeddingEngine } from '../process/types'
 import { defaultDbPath, expandHome } from '../util/paths'
 import { VERSION } from '../version'
 import { type JsonRpcId, type JsonRpcRequest, type JsonRpcResponse, StdioJsonRpc } from './protocol'
 import {
   clampLimit,
   clampOffset,
+  normalizeMode,
   normalizeSource,
   normalizeSources,
   parseTimestamp,
@@ -40,6 +44,12 @@ const TOOLS = [
           description: 'Optional source filter.',
         },
         app: { type: 'string', description: 'Optional active app substring filter.' },
+        mode: {
+          type: 'string',
+          enum: ['lexical', 'semantic', 'hybrid'],
+          description:
+            'Retrieval mode. Default hybrid (FTS5 + semantic, fused). Falls back to lexical when the semantic index is unavailable.',
+        },
         limit: { type: 'number', minimum: 1, maximum: 100, description: 'Default 20, max 100.' },
         offset: { type: 'number', minimum: 0, description: 'Pagination offset.' },
       },
@@ -158,6 +168,63 @@ interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
   structuredContent?: unknown
   isError?: boolean
+}
+
+// Encodes a search query into an embedding, or undefined when semantic search
+// is unavailable (no engine configured/built, model not loaded, etc.) so the
+// read store transparently falls back to FTS5.
+type QueryEncoder = (text: string) => Promise<Float32Array | undefined>
+
+// Owns a single warm embedding worker for the lifetime of the MCP server.
+// `warm()` kicks off the engine at server boot so the first query doesn't pay
+// the model-load cost; a failed attempt clears the cached promise so a later
+// request retries instead of disabling semantic search for the whole session.
+function makeQueryEncoder(): {
+  encode: QueryEncoder
+  warm: () => void
+  stop: () => Promise<void>
+} {
+  let engine: EmbeddingEngine | undefined
+  let startup: Promise<boolean> | undefined
+
+  async function ensure(): Promise<boolean> {
+    if (startup) return startup
+    const attempt = (async () => {
+      try {
+        const cfg = loadConfig()
+        const candidate = makeEmbedding(cfg.processing.embeddings)
+        if (candidate.dim <= 0 || !(await candidate.ready())) return false
+        await candidate.start({ onStatus: () => {} })
+        engine = candidate
+        return true
+      } catch (err) {
+        console.error(`[hyprmnesia:mcp] semantic search unavailable: ${String(err)}`)
+        return false
+      }
+    })()
+    startup = attempt
+    const ok = await attempt
+    if (!ok) startup = undefined
+    return ok
+  }
+
+  return {
+    async encode(text) {
+      if (!(await ensure()) || !engine) return undefined
+      try {
+        const [result] = await engine.embed([{ id: 'query', kind: 'query', text }])
+        return result?.vector
+      } catch {
+        return undefined
+      }
+    },
+    warm() {
+      void ensure().catch(() => undefined)
+    },
+    async stop() {
+      await engine?.stop().catch(() => {})
+    },
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -288,21 +355,39 @@ function linesForRecentActivity(
     .join('\n')
 }
 
-async function callTool(dbPath: string, name: string, rawArgs: unknown): Promise<ToolResult> {
+async function callTool(
+  dbPath: string,
+  name: string,
+  rawArgs: unknown,
+  encodeQuery: QueryEncoder,
+): Promise<ToolResult> {
   const args = asRecord(rawArgs)
   if (name === 'search') {
-    rejectUnknownArgs(args, name, ['query', 'from', 'to', 'source', 'app', 'limit', 'offset'])
+    rejectUnknownArgs(args, name, [
+      'query',
+      'from',
+      'to',
+      'source',
+      'app',
+      'mode',
+      'limit',
+      'offset',
+    ])
     const query = stringArg(args, 'query')
     const from = parseTimestamp(args['from'], 'from')
     const to = parseTimestamp(args['to'], 'to')
     validateRange(from, to)
     const source = normalizeSource(args['source'])
+    const mode = normalizeMode(args['mode'])
+    const queryVector = mode === 'lexical' ? undefined : await encodeQuery(query)
     const results = withReadStore(dbPath, (store) =>
       store.search(query, {
         from,
         to,
         source,
         app: typeof args['app'] === 'string' ? args['app'] : undefined,
+        mode,
+        queryVector,
         limit: clampLimit(args['limit']),
         offset: clampOffset(args['offset']),
       }),
@@ -429,6 +514,7 @@ function protocolResult(method: string, params: unknown): unknown {
 async function handleMessage(
   dbPath: string,
   message: JsonRpcRequest,
+  encodeQuery: QueryEncoder,
 ): Promise<JsonRpcResponse | undefined> {
   const hasId = Object.hasOwn(message, 'id')
   const id = hasId ? (message.id ?? null) : null
@@ -446,7 +532,7 @@ async function handleMessage(
     const name = params['name']
     if (typeof name !== 'string') return failure(id, -32602, 'tools/call requires params.name')
     try {
-      return success(id, await callTool(dbPath, name, params['arguments']))
+      return success(id, await callTool(dbPath, name, params['arguments'], encodeQuery))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return success(id, { content: [{ type: 'text', text: message }], isError: true })
@@ -460,14 +546,14 @@ function isLocalBind(bind: string): boolean {
   return bind === '127.0.0.1' || bind === 'localhost' || bind === '::1' || bind === '[::1]'
 }
 
-async function startStdioMcpServer(dbPath: string): Promise<void> {
+async function startStdioMcpServer(dbPath: string, encodeQuery: QueryEncoder): Promise<void> {
   console.error(
     `[hyprmnesia:mcp] starting read-only MCP server; transport=stdio; db=${dbPath}; tools=${TOOLS.length}`,
   )
 
   let rpc: StdioJsonRpc
   rpc = new StdioJsonRpc((message: JsonRpcRequest) => {
-    void handleMessage(dbPath, message).then((response) => {
+    void handleMessage(dbPath, message, encodeQuery).then((response) => {
       if (response) rpc.send(response)
     })
   })
@@ -475,7 +561,12 @@ async function startStdioMcpServer(dbPath: string): Promise<void> {
   await rpc.start()
 }
 
-async function startHttpMcpServer(dbPath: string, bind: string, port: number): Promise<void> {
+async function startHttpMcpServer(
+  dbPath: string,
+  bind: string,
+  port: number,
+  encodeQuery: QueryEncoder,
+): Promise<void> {
   if (!isLocalBind(bind)) {
     throw new Error(`refusing non-local MCP bind ${bind}; auth is not implemented yet`)
   }
@@ -500,7 +591,7 @@ async function startHttpMcpServer(dbPath: string, bind: string, port: number): P
       const batch = Array.isArray(body)
       const messages = (batch ? body : [body]) as JsonRpcRequest[]
       const responses = (
-        await Promise.all(messages.map((message) => handleMessage(dbPath, message)))
+        await Promise.all(messages.map((message) => handleMessage(dbPath, message, encodeQuery)))
       ).filter((response): response is JsonRpcResponse => response !== undefined)
       if (responses.length === 0) return new Response(null, { status: 202 })
       return Response.json(batch ? responses : responses[0], {
@@ -528,14 +619,19 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
   const bind = options.bind ?? '127.0.0.1'
   const port = options.port ?? 37373
 
-  if (transport === 'stdio') {
-    await startStdioMcpServer(dbPath)
-    return
+  const encoder = makeQueryEncoder()
+  encoder.warm()
+  try {
+    if (transport === 'stdio') {
+      await startStdioMcpServer(dbPath, encoder.encode)
+      return
+    }
+    if (transport === 'http') {
+      await startHttpMcpServer(dbPath, bind, port, encoder.encode)
+      return
+    }
+    throw new Error(`unsupported MCP transport: ${String(transport)}`)
+  } finally {
+    await encoder.stop()
   }
-  if (transport === 'http') {
-    await startHttpMcpServer(dbPath, bind, port)
-    return
-  }
-
-  throw new Error(`unsupported MCP transport: ${String(transport)}`)
 }

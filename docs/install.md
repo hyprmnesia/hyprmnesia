@@ -78,6 +78,12 @@ during `bun run build` (or on first `dev` invocation that needs them).
 
 **Requirements:** macOS 13 or later (ScreenCaptureKit).
 
+- OCR uses Tesseract on macOS. Install it before starting capture:
+
+  ```sh
+  brew install tesseract
+  ```
+
 - Screen capture and system-audio capture are handled by the native helper
   `hpm-sck`, built from `sck/`. **No BlackHole or loopback driver is required.**
 - On first run, macOS prompts for **Screen Recording** permission in
@@ -90,13 +96,31 @@ If the permission dialog never appears, see [Troubleshooting](#troubleshooting).
 
 ### Windows
 
-**System-audio capture** requires the [Screen Capturer Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases)
-package, which registers the `virtual-audio-capturer` DirectShow device that
-Hyprmnesia records from.
+**System-audio capture** has two backends, selected by
+`capture.audio.system.backend` in the config (or the "System backend" row in the
+TUI settings):
 
-- Download and run the installer from the link above.
-- To skip system audio entirely (e.g. on a machine where the dshow device is
-  unavailable), launch Hyprmnesia with `--no-system-audio`.
+- **`wasapi`** (preferred) — a bundled native helper (`hpm-wasapi`) captures the
+  render endpoint via WASAPI loopback. It taps the engine mix, so it keeps
+  capturing **even when Windows output is muted or its volume is 0** — the common
+  case for a memory app where you want to silence your speakers but still
+  transcribe. No external driver is required; the helper ships in `dist/native/`.
+- **`dshow`** (compatibility fallback) — records the `virtual-audio-capturer`
+  DirectShow device from the
+  [Screen Capturer Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases)
+  package. This device follows the audible output, so **muting Windows silences
+  the capture**.
+- **`auto`** (default) — uses `wasapi` when the helper is present, otherwise
+  falls back to `dshow` (and logs a warning that capture will follow mute).
+
+The selected backend and device are recorded in the daemon log's `started` event
+so you can confirm which path is active.
+
+- To use `dshow`, install Screen Capturer Recorder from the link above.
+- To skip system audio entirely, launch Hyprmnesia with `--no-system-audio`.
+- If WASAPI loopback still follows mute on your hardware/driver stack, route the
+  app's audio into a virtual audio cable/sink and capture that device via
+  `backend: dshow` with an explicit `device` name.
 
 Microphone and screen capture work out of the box on Windows.
 
@@ -106,7 +130,15 @@ Install the system packages used by the native tray, screen capture, and audio
 capture:
 
 ```sh
-sudo apt install libxdo-dev imagemagick ffmpeg
+sudo apt install -y \
+  libxdo-dev \
+  imagemagick \
+  ffmpeg \
+  libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-tools \
+  gstreamer1.0-plugins-base \
+  tesseract-ocr
 ```
 
 - **`libxdo-dev`** — required to link the Rust tray helper (`tray/`).
@@ -116,6 +148,9 @@ sudo apt install libxdo-dev imagemagick ffmpeg
   `ffmpeg-static` binary lacks PulseAudio / PipeWire support, so on Linux
   Hyprmnesia uses the *system* `ffmpeg`. Debian/Ubuntu builds enable `libpulse`
   by default; `pipewire-pulse` provides the PA socket on modern desktops.
+- **`tesseract-ocr`** - provides OCR for screenshots.
+- **GStreamer packages** — required to build and run the Linux capture helper
+  that uses the `gstreamer` Rust bindings.
 
 **Session requirement:** screen capture currently requires an **Xorg** session —
 `import` is X11-only. Wayland support is tracked in
@@ -156,14 +191,24 @@ terminal app, e.g. Terminal.app, iTerm, Ghostty). Quit and relaunch the
 terminal after granting permission.
 
 **Windows — system audio is silent.**
-Confirm the `virtual-audio-capturer` device is registered:
+First check the daemon log's `started` event for the `system` source to see which
+backend is active.
 
-```sh
-ffmpeg -list_devices true -f dshow -i dummy
-```
+- If `backend: "wasapi"` and audio is still silent, the helper may not be
+  capturing — confirm `dist/native/hpm-wasapi.exe` exists (built by
+  `bun run build`) and check the log for an `hpm-wasapi ... exited` error.
+- If `backend: "dshow"`, capture follows the Windows output: unmute the output,
+  or switch `capture.audio.system.backend` to `wasapi`. Confirm the dshow device
+  is registered with:
 
-If it doesn't appear, re-run the Screen Capturer Recorder installer. As a
-workaround, launch Hyprmnesia with `--no-system-audio`.
+  ```sh
+  ffmpeg -list_devices true -f dshow -i dummy
+  ```
+
+  If `virtual-audio-capturer` doesn't appear, re-run the Screen Capturer Recorder
+  installer.
+
+As a last resort, launch Hyprmnesia with `--no-system-audio`.
 
 **Linux — screen capture fails on a fresh login.**
 You are most likely on a Wayland session. Log out and pick the Xorg variant of
@@ -175,3 +220,8 @@ your desktop at the login screen, then try again.
 **Linux — `ffmpeg` cannot find a PulseAudio source.**
 Make sure either PulseAudio or `pipewire-pulse` is running. `pactl info` should
 print a server name.
+
+**macOS/Linux - screenshots are captured but OCR text is empty.**
+Confirm Tesseract is installed with `tesseract --version`. If it is installed in
+a custom location, set `processing.ocr.options.binary` in
+`~/.hyprmnesia/config.yaml` to the absolute binary path.

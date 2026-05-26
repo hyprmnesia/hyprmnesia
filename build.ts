@@ -34,6 +34,9 @@
 //                NDJSON over stdio. Built everywhere by `cargo --workspace`
 //                but only copied into dist/native on darwin (no-op stub
 //                elsewhere).
+//    - hpm-wasapi : Windows WASAPI loopback helper, writes raw s16le mono PCM
+//                to stdout. Built everywhere by `cargo --workspace` but only
+//                copied into dist/native on win32 (no-op stub elsewhere).
 //    All crates live in a single Cargo workspace at the repo root so we build
 //    them in one cargo invocation.
 
@@ -54,9 +57,17 @@ const NATIVE_BINS: readonly string[] = [
   'hpm-tray',
   'hpm-ocr',
   'hpm-asr',
+  'hpm-embed',
   ...(process.platform === 'darwin' ? ['hpm-sck'] : []),
+  ...(process.platform === 'win32' ? ['hpm-wasapi'] : []),
+  ...(process.platform === 'linux' ? ['hpm-wlcap'] : []),
 ]
 const NATIVE_DEST_DIR = resolve('./dist/native')
+
+// Pinned sqlite-vec loadable extension. Powers semantic/hybrid MCP search; when
+// it can't be fetched the index simply stays FTS5-only, so this step is
+// best-effort and never fails the build.
+const SQLITE_VEC_VERSION = 'v0.1.6'
 
 const bundle = await Bun.build({
   entrypoints: ['./src/cli.ts'],
@@ -121,4 +132,45 @@ for (const name of await readdir(resolve('./target/release')).catch(() => [])) {
   }
 }
 
+await fetchSqliteVec()
+
 console.log(`built dist/hpm with native helpers: ${NATIVE_BINS.join(', ')}`)
+
+async function fetchSqliteVec(): Promise<void> {
+  const lib = vecLibName()
+  const dest = resolve(NATIVE_DEST_DIR, lib)
+  if (existsSync(dest)) return
+  const platform = sqliteVecPlatform()
+  if (!platform) {
+    console.warn(`sqlite-vec: unsupported platform ${process.platform}/${process.arch}; skipping`)
+    return
+  }
+  const asset = `sqlite-vec-${SQLITE_VEC_VERSION.slice(1)}-loadable-${platform}.tar.gz`
+  const url = `https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/${asset}`
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const tmp = resolve('./dist', asset)
+    await Bun.write(tmp, await res.arrayBuffer())
+    await $`tar -xzf ${tmp} -C ${NATIVE_DEST_DIR} ${lib}`
+    await rm(tmp, { force: true })
+    console.log(`fetched sqlite-vec ${SQLITE_VEC_VERSION} (${lib})`)
+  } catch (err) {
+    console.warn(`sqlite-vec: download failed (${String(err)}); semantic search disabled`)
+  }
+}
+
+function vecLibName(): string {
+  if (process.platform === 'win32') return 'vec0.dll'
+  if (process.platform === 'darwin') return 'vec0.dylib'
+  return 'vec0.so'
+}
+
+function sqliteVecPlatform(): string | undefined {
+  const arch = process.arch === 'arm64' ? 'aarch64' : process.arch === 'x64' ? 'x86_64' : undefined
+  if (!arch) return undefined
+  if (process.platform === 'linux') return `linux-${arch}`
+  if (process.platform === 'darwin') return `macos-${arch}`
+  if (process.platform === 'win32' && arch === 'x86_64') return 'windows-x86_64'
+  return undefined
+}

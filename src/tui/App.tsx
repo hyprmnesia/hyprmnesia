@@ -1,6 +1,6 @@
 import { Box, Text, useApp, useInput } from 'ink'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { type Config, ensureDefaultConfig, loadConfigForEditing } from '../config'
+import { type Config, ensureDefaultConfig, loadConfigForEditing, saveConfig } from '../config'
 import type { CaptureEvent, Source } from '../core/events'
 import type { Orchestrator, OrchestratorStatus } from '../core/orchestrator'
 import { selfCliArgs } from '../util/selfCli'
@@ -140,6 +140,37 @@ export function App({ orch }: { orch: Orchestrator }) {
       refresh: () => {
         setStatus(orch.status())
       },
+      toggleSource: async (source: Source) => {
+        const next = loadConfigForEditing()
+        const stream =
+          source === 'screen'
+            ? next.capture.screen
+            : source === 'mic'
+              ? next.capture.audio.mic
+              : next.capture.audio.system
+        stream.enabled = !stream.enabled
+        saveConfig(next)
+        setSettings(next)
+        const running = orch.isRunning()
+        setLogEvents((prev) =>
+          pushBounded(
+            prev,
+            {
+              type: 'log',
+              at: Date.now(),
+              level: 'info',
+              message: `${source} capture ${stream.enabled ? 'enabled' : 'disabled'}${
+                running ? '; restarting daemon…' : '; applies on next start'
+              }`,
+            },
+            MAX_LOG_EVENTS,
+          ),
+        )
+        if (running) {
+          await restartDaemon()
+          setStatus(orch.status())
+        }
+      },
       reloadSettings: () => {
         setSettings(loadConfigForEditing())
         setSettingsMessage(`reloaded ${ensureDefaultConfig()}`)
@@ -196,6 +227,12 @@ export function App({ orch }: { orch: Orchestrator }) {
       setSettings(loadConfigForEditing())
       setSettingsOpen(true)
       setLogsOpen(false)
+    } else if (input === 's') {
+      void actions.toggleSource('screen')
+    } else if (input === 'm') {
+      void actions.toggleSource('mic')
+    } else if (input === 'y') {
+      void actions.toggleSource('system')
     }
   })
 

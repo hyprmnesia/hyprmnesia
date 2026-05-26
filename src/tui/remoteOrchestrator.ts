@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
-import type { Config } from '../config'
+import { type Config, loadConfigForEditing } from '../config'
 import { isDaemonAlive, LOG_FILE, readLevels } from '../core/daemon'
 import type { CaptureEvent, Source, WindowContext } from '../core/events'
 import { EventBus } from '../core/events'
@@ -22,6 +22,21 @@ export function makeRemoteOrchestrator(): Orchestrator {
     system: { enabled: true, running: false },
   }
   let focusedWindow: WindowContext | undefined
+
+  // The daemon owns capture config; reflect the persisted enabled flags so a
+  // source toggled off renders as "disabled" rather than merely "stopped".
+  const readEnabledFromConfig = (): Record<Source, boolean> => {
+    try {
+      const cfg = loadConfigForEditing()
+      return {
+        screen: cfg.capture.screen.enabled,
+        mic: cfg.capture.audio.mic.enabled,
+        system: cfg.capture.audio.system.enabled,
+      }
+    } catch {
+      return { screen: true, mic: true, system: true }
+    }
+  }
 
   const clearSourceState = () => {
     for (const source of Object.values(sources)) {
@@ -122,15 +137,27 @@ export function makeRemoteOrchestrator(): Orchestrator {
       await runCli('stop')
     },
     isRunning: () => isDaemonAlive(),
-    status: (): OrchestratorStatus => ({
-      running: isDaemonAlive(),
-      sources: {
-        screen: { ...sources.screen, running: isDaemonAlive() && sources.screen.running },
-        mic: { ...sources.mic, running: isDaemonAlive() && sources.mic.running },
-        system: { ...sources.system, running: isDaemonAlive() && sources.system.running },
-      },
-      focused_window: focusedWindow,
-    }),
+    status: (): OrchestratorStatus => {
+      const alive = isDaemonAlive()
+      const enabled = readEnabledFromConfig()
+      return {
+        running: alive,
+        sources: {
+          screen: {
+            ...sources.screen,
+            enabled: enabled.screen,
+            running: alive && sources.screen.running,
+          },
+          mic: { ...sources.mic, enabled: enabled.mic, running: alive && sources.mic.running },
+          system: {
+            ...sources.system,
+            enabled: enabled.system,
+            running: alive && sources.system.running,
+          },
+        },
+        focused_window: focusedWindow,
+      }
+    },
     dispose,
   }
 }
