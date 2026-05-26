@@ -1,5 +1,11 @@
 # hyprmnesia
 
+## 0.1.1
+
+### Patch Changes
+
+- [#30](https://github.com/hyprmnesia/hyprmnesia/pull/30) [`d1fbb4f`](https://github.com/hyprmnesia/hyprmnesia/commit/d1fbb4f7d3179e84881d6adb21322892dd07ad68) Thanks [@julpel8](https://github.com/julpel8)! - Publish the GitHub release automatically when the Changesets version PR is merged.
+
 ## 0.1.0
 
 ### Minor Changes
