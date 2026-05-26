@@ -44,6 +44,7 @@ import { existsSync } from 'node:fs'
 import { copyFile, mkdir, readdir, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { $ } from 'bun'
+import ffmpegStaticPath from 'ffmpeg-static'
 
 const STUBS = new Set(['react-devtools-core', 'mock-aws-s3', 'aws-sdk', 'nock'])
 const COMPAT_THROTTLE = resolve('./node_modules/es-toolkit/dist/compat/function/throttle.mjs')
@@ -52,6 +53,8 @@ const GET_WINDOWS_NATIVE_SRC = resolve(
   './node_modules/get-windows/lib/binding/napi-9-win32-unknown-x64/node-get-windows.node',
 )
 const GET_WINDOWS_NATIVE_DEST = resolve('./dist/native/node-get-windows.node')
+const FFMPEG_STATIC_SRC =
+  typeof ffmpegStaticPath === 'string' ? resolve(ffmpegStaticPath) : undefined
 const EXE = process.platform === 'win32' ? '.exe' : ''
 const NATIVE_BINS: readonly string[] = [
   'hpm-tray',
@@ -118,6 +121,9 @@ if (process.platform === 'win32' && existsSync(GET_WINDOWS_NATIVE_SRC)) {
 
 await $`cargo build --release --workspace`
 await mkdir(NATIVE_DEST_DIR, { recursive: true })
+if (process.platform !== 'linux' && FFMPEG_STATIC_SRC && existsSync(FFMPEG_STATIC_SRC)) {
+  await copyFile(FFMPEG_STATIC_SRC, resolve(NATIVE_DEST_DIR, `ffmpeg${EXE}`))
+}
 for (const name of NATIVE_BINS) {
   const file = `${name}${EXE}`
   const src = resolve(`./target/release/${file}`)

@@ -110,6 +110,24 @@ jobs:
       - name: Package installers
         run: bun run package
 
+      - name: Smoke packaged release
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            BIN="hpm.exe"
+          else
+            BIN="hpm"
+          fi
+          HPM="$(find artifacts/staging -mindepth 2 -maxdepth 2 -type f -name "$BIN" | sort | head -n 1)"
+          if [[ -z "$HPM" ]]; then
+            echo "Packaged $BIN not found under artifacts/staging" >&2
+            find artifacts/staging -maxdepth 3 -type f | sort >&2
+            exit 1
+          fi
+          "$HPM" version
+          "$HPM" --help
+          "$HPM" _smoke-release
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
