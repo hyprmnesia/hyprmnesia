@@ -312,8 +312,10 @@ function cmdStartDaemon(flags: Record<string, string | boolean>) {
 function cmdStop() {
   const r = stopDaemon()
   if (r.stopped) console.log(`daemon stopped (pid ${r.pid})`)
-  else if (r.pid) console.log(`pid file present (${r.pid}) but process not alive — cleaned up`)
-  else console.log('no daemon running')
+  else if (r.pid) {
+    console.error(`failed to stop daemon (pid ${r.pid})`)
+    process.exit(1)
+  } else console.log('no daemon running')
 }
 
 /**

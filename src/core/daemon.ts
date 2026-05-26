@@ -112,6 +112,18 @@ function waitForPidStopped(pid: number, timeoutMs: number): boolean {
   return !isPidAlive(pid)
 }
 
+function forceStopDaemonPid(pid: number): void {
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-pid, 'SIGKILL')
+      return
+    } catch {}
+  }
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {}
+}
+
 function clearStaleStartLock(): void {
   try {
     const age = Date.now() - statSync(DAEMON_LOCK_FILE).mtimeMs
@@ -241,13 +253,15 @@ export function stopDaemon(): { stopped: boolean; pid?: number } {
   try {
     requestDaemonStop()
     stopped = waitForPidStopped(pid, 120_000)
-    if (!stopped) process.kill(pid)
-    stopped = true
+    if (!stopped) {
+      forceStopDaemonPid(pid)
+      stopped = waitForPidStopped(pid, 5_000)
+    }
   } catch {
     stopped = false
   }
   try {
-    if (existsSync(PID_FILE)) unlinkSync(PID_FILE)
+    if (stopped && existsSync(PID_FILE)) unlinkSync(PID_FILE)
   } catch {}
   clearStopRequest()
   return { stopped, pid }

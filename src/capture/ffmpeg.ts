@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import ffmpegPath from 'ffmpeg-static'
 
 export const SYSTEM_AUDIO_DSHOW_DEVICE = 'virtual-audio-capturer'
@@ -26,27 +26,76 @@ export function buildWasapiArgs(device: string, sampleRate: number): string[] {
   return args
 }
 
+interface FfmpegSearchOptions {
+  platform?: typeof process.platform
+  env?: Record<string, string | undefined>
+  execPath?: string
+  cwd?: string
+  ffmpegStaticPath?: string | null
+}
+
+function ffmpegBinaryName(platform = process.platform): string {
+  return platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
+}
+
+function pushUnique(paths: string[], value: string | undefined | null): void {
+  if (!value || paths.includes(value)) return
+  paths.push(value)
+}
+
+function pathCandidates(envPath: string | undefined, binary: string): string[] {
+  if (!envPath) return []
+  return envPath
+    .split(delimiter)
+    .filter((dir) => dir.trim() !== '')
+    .map((dir) => join(dir, binary))
+}
+
+export function ffmpegSearchPaths(opts: FfmpegSearchOptions = {}): string[] {
+  const platform = opts.platform ?? process.platform
+  const env = opts.env ?? process.env
+  const execPath = opts.execPath ?? process.execPath
+  const cwd = opts.cwd ?? process.cwd()
+  const staticPath = opts.ffmpegStaticPath ?? ffmpegPath
+  const binary = ffmpegBinaryName(platform)
+  const paths: string[] = []
+
+  pushUnique(paths, env.HPM_FFMPEG)
+  pushUnique(paths, env.FFMPEG_BIN)
+  pushUnique(paths, join(dirname(execPath), 'native', binary))
+  pushUnique(paths, join(dirname(execPath), binary))
+  pushUnique(paths, join(cwd, 'dist', 'native', binary))
+  pushUnique(paths, join(cwd, 'dist', binary))
+
+  if (platform === 'linux') {
+    // ffmpeg-static on Linux is built without libpulse / libpipewire, so it
+    // cannot capture from `-f pulse`. Prefer the system ffmpeg (Debian/Ubuntu
+    // builds enable libpulse by default).
+    pushUnique(paths, '/usr/bin/ffmpeg')
+    pushUnique(paths, '/usr/local/bin/ffmpeg')
+  } else {
+    pushUnique(paths, staticPath)
+  }
+
+  for (const candidate of pathCandidates(env.PATH, binary)) pushUnique(paths, candidate)
+  return paths
+}
+
 let cachedFfmpegPath: string | null = null
 
 export function getFfmpegPath(): string {
   if (cachedFfmpegPath) return cachedFfmpegPath
+  const found = ffmpegSearchPaths().find((candidate) => existsSync(candidate))
+  if (found) {
+    cachedFfmpegPath = found
+    return cachedFfmpegPath
+  }
   if (process.platform === 'linux') {
-    // ffmpeg-static on Linux is built without libpulse / libpipewire, so it
-    // cannot capture from `-f pulse`. Prefer the system ffmpeg (Debian/Ubuntu
-    // builds enable libpulse by default).
-    for (const candidate of ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg']) {
-      if (existsSync(candidate)) {
-        cachedFfmpegPath = candidate
-        return cachedFfmpegPath
-      }
-    }
     throw new Error(
       'ffmpeg not found on Linux. Install it (e.g. `sudo apt install ffmpeg`) — the bundled ffmpeg-static binary lacks PulseAudio support.',
     )
   }
-  if (!ffmpegPath) throw new Error('ffmpeg-static did not provide a binary for this platform')
-  cachedFfmpegPath = ffmpegPath
-  return cachedFfmpegPath
+  throw new Error('ffmpeg binary not found; install ffmpeg or set HPM_FFMPEG/FFMPEG_BIN')
 }
 
 export interface ImageQualityOptions {
