@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, watch } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { type Config, ensureDefaultConfig, loadConfig } from './config'
 import {
   clearStopRequest,
@@ -369,6 +369,40 @@ function cmdStatus(flags: Record<string, string | boolean>) {
   }
 }
 
+function isInsideDir(path: string, dir: string): boolean {
+  const rel = relative(resolve(dir), resolve(path))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/**
+ * Hidden release-only smoke test. It exercises runtime asset lookup from the
+ * packaged executable so CI catches build-machine paths baked into releases.
+ */
+async function cmdSmokeRelease() {
+  const { getFfmpegPath } = await import('./capture/ffmpeg')
+  const ffmpeg = getFfmpegPath()
+  if (process.platform !== 'linux' && !isInsideDir(ffmpeg, dirname(process.execPath))) {
+    console.error(`ffmpeg resolved outside packaged app: ${ffmpeg}`)
+    process.exit(1)
+  }
+
+  const result = spawnSync(ffmpeg, ['-version'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  if (result.error || result.status !== 0) {
+    const details = [String(result.error ?? ''), result.stderr, result.stdout]
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+    console.error(`ffmpeg smoke failed${details ? `: ${details}` : ''}`)
+    process.exit(1)
+  }
+
+  console.log(`ffmpeg: ${ffmpeg}`)
+  console.log('release smoke ok')
+}
+
 /**
  * Tails the daemon log, optionally following it across rotation.
  */
@@ -525,6 +559,9 @@ switch (cmd) {
     break
   case '_status':
     cmdStatus(flags)
+    break
+  case '_smoke-release':
+    await cmdSmokeRelease()
     break
   case 'mcp':
     await cmdMcp(flags)
