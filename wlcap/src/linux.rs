@@ -484,3 +484,129 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the wlcap helper functions. The full ScreenCast pipeline
+    //! requires a Wayland compositor with xdg-desktop-portal — those scenarios
+    //! are exercised by the integration test in `wlcap/tests/binary.rs` (which
+    //! runs under WAYLAND_DISPLAY + HPM_WLCAP_E2E=1) and by manual smoke
+    //! checks. What's tested here is the protocol-shape stuff that doesn't
+    //! need a live portal: NDJSON request parsing, image-format selection,
+    //! token allocation, and the small zbus-value adapters.
+    use super::{first_node_id, next_token, value_as_string, ImageFormat, Request};
+    use zbus::zvariant::{OwnedValue, Value};
+
+    #[test]
+    fn image_format_parse_accepts_jpeg_jpg_case_insensitive() {
+        assert!(matches!(ImageFormat::parse(Some("jpeg")), ImageFormat::Jpeg));
+        assert!(matches!(ImageFormat::parse(Some("JPEG")), ImageFormat::Jpeg));
+        assert!(matches!(ImageFormat::parse(Some("jpg")), ImageFormat::Jpeg));
+        assert!(matches!(ImageFormat::parse(Some("JPG")), ImageFormat::Jpeg));
+    }
+
+    #[test]
+    fn image_format_parse_defaults_to_png_for_anything_else() {
+        assert!(matches!(ImageFormat::parse(Some("png")), ImageFormat::Png));
+        assert!(matches!(ImageFormat::parse(None), ImageFormat::Png));
+        // Unknown values fall back to PNG — never crashes.
+        assert!(matches!(ImageFormat::parse(Some("webp")), ImageFormat::Png));
+        assert!(matches!(ImageFormat::parse(Some("")), ImageFormat::Png));
+    }
+
+    #[test]
+    fn next_token_monotonically_increments_with_a_stable_prefix() {
+        let mut counter = 0;
+        assert_eq!(next_token(&mut counter), "hpm1");
+        assert_eq!(next_token(&mut counter), "hpm2");
+        assert_eq!(next_token(&mut counter), "hpm3");
+        assert_eq!(counter, 3);
+    }
+
+    #[test]
+    fn request_parses_start_with_optional_fields() {
+        let req: Request =
+            serde_json::from_str(r#"{"type":"start","frame_interval_ms":2000,"image_format":"jpeg","jpeg_quality":75,"restore_token":"tok-123"}"#)
+                .expect("valid start request");
+        let Request::Start(params) = req else {
+            panic!("expected Start variant");
+        };
+        assert_eq!(params.frame_interval_ms, Some(2000));
+        assert_eq!(params.image_format.as_deref(), Some("jpeg"));
+        assert_eq!(params.jpeg_quality, Some(75));
+        assert_eq!(params.restore_token.as_deref(), Some("tok-123"));
+    }
+
+    #[test]
+    fn request_parses_start_with_no_fields() {
+        let req: Request = serde_json::from_str(r#"{"type":"start"}"#).expect("valid start");
+        let Request::Start(params) = req else {
+            panic!("expected Start variant");
+        };
+        assert!(params.frame_interval_ms.is_none());
+        assert!(params.image_format.is_none());
+        assert!(params.jpeg_quality.is_none());
+        assert!(params.restore_token.is_none());
+    }
+
+    #[test]
+    fn request_parses_stop_and_shutdown() {
+        assert!(matches!(
+            serde_json::from_str::<Request>(r#"{"type":"stop"}"#).unwrap(),
+            Request::Stop,
+        ));
+        assert!(matches!(
+            serde_json::from_str::<Request>(r#"{"type":"shutdown"}"#).unwrap(),
+            Request::Shutdown,
+        ));
+    }
+
+    #[test]
+    fn request_rejects_unknown_type() {
+        let err = serde_json::from_str::<Request>(r#"{"type":"frobnicate"}"#);
+        assert!(err.is_err(), "unknown request type must fail to deserialize");
+    }
+
+    #[test]
+    fn value_as_string_extracts_strings_and_returns_none_otherwise() {
+        let s: OwnedValue = Value::from("hello").try_to_owned().expect("owned string");
+        assert_eq!(value_as_string(&s).as_deref(), Some("hello"));
+
+        let n: OwnedValue = Value::from(42u32).try_to_owned().expect("owned u32");
+        assert_eq!(value_as_string(&n), None);
+    }
+
+    #[test]
+    fn first_node_id_extracts_the_pipewire_node_from_the_streams_array() {
+        // The portal returns `streams` as an array of structures whose first
+        // field is the PipeWire node id (u32). Build a minimal fixture of
+        // that shape and verify the parser recovers the id.
+        use zbus::zvariant::{Array, Signature, Structure, StructureBuilder};
+
+        let inner: Structure<'static> = StructureBuilder::new()
+            .add_field(42u32)
+            .add_field("ignored")
+            .build()
+            .expect("build structure");
+        let signature: Signature = "(us)".try_into().expect("valid signature");
+        let mut arr = Array::new(&signature);
+        arr.append(Value::Structure(inner)).expect("append struct");
+
+        let owned: OwnedValue = Value::Array(arr).try_to_owned().expect("owned array");
+        let id = first_node_id(Some(&owned)).expect("parse node id");
+        assert_eq!(id, 42);
+    }
+
+    #[test]
+    fn first_node_id_errors_on_missing_streams() {
+        let err = first_node_id(None);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn first_node_id_errors_when_streams_is_not_an_array() {
+        let owned: OwnedValue = Value::from("not-an-array").try_to_owned().expect("string");
+        let err = first_node_id(Some(&owned));
+        assert!(err.is_err());
+    }
+}

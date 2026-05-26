@@ -56,6 +56,41 @@ export type {
   TimelineItem,
 } from './types'
 
+// k0 in the standard RRF formulation: the larger it is, the less rank position
+// matters. 60 is the canonical default from Cormack et al. (TREC-2009) and
+// matches what Vespa/Elastic ship. Exposed for tests.
+export const RRF_K0 = 60
+
+// Reciprocal Rank Fusion: score = Σ 1/(k0 + rank). Higher is better, so the
+// returned `score` semantics differ from BM25 (lower-is-better) on purpose.
+// Each input list is treated as ranked best-first (index 0 = best). The same
+// result appearing in both lists has its contributions summed; ties are broken
+// by the more recent `time` first.
+export function rrfFuse(
+  fts: SearchResult[],
+  vec: SearchResult[],
+  limit: number,
+  offset: number,
+): SearchResult[] {
+  const fused = new Map<string, { result: SearchResult; rrf: number; order: number }>()
+  let counter = 0
+  const add = (list: SearchResult[]) => {
+    list.forEach((result, index) => {
+      const key = `${result.type}:${result.id}`
+      const contribution = 1 / (RRF_K0 + index + 1)
+      const existing = fused.get(key)
+      if (existing) existing.rrf += contribution
+      else fused.set(key, { result, rrf: contribution, order: counter++ })
+    })
+  }
+  add(fts)
+  add(vec)
+  return [...fused.values()]
+    .sort((a, b) => b.rrf - a.rrf || b.result.time - a.result.time || a.order - b.order)
+    .slice(offset, offset + limit)
+    .map((entry) => ({ ...entry.result, score: entry.rrf }))
+}
+
 export class HyprmnesiaReadStore {
   private db: Database
   // True when sqlite-vec loaded and the v3 vector tables exist. Vector search
@@ -107,7 +142,7 @@ export class HyprmnesiaReadStore {
 
     // hybrid: fuse FTS5 (BM25) and vector rankings with Reciprocal Rank Fusion.
     const vec = this.vectorResults(filters, innerLimit)
-    return this.fuse(fts, vec, limit, offset)
+    return rrfFuse(fts, vec, limit, offset)
   }
 
   private ftsResults(query: string, filters: QueryFilters, innerLimit: number): SearchResult[] {
@@ -242,33 +277,6 @@ export class HyprmnesiaReadStore {
     ]
     // distance: lower is closer.
     return out.sort((a, b) => a.score - b.score || b.time - a.time)
-  }
-
-  // Reciprocal Rank Fusion: score = Σ 1/(k0 + rank). Higher is better, so the
-  // returned `score` semantics differ from BM25 (lower-is-better) on purpose.
-  private fuse(
-    fts: SearchResult[],
-    vec: SearchResult[],
-    limit: number,
-    offset: number,
-  ): SearchResult[] {
-    const k0 = 60
-    const fused = new Map<string, { result: SearchResult; rrf: number }>()
-    const add = (list: SearchResult[]) => {
-      list.forEach((result, index) => {
-        const key = `${result.type}:${result.id}`
-        const contribution = 1 / (k0 + index + 1)
-        const existing = fused.get(key)
-        if (existing) existing.rrf += contribution
-        else fused.set(key, { result, rrf: contribution })
-      })
-    }
-    add(fts)
-    add(vec)
-    return [...fused.values()]
-      .sort((a, b) => b.rrf - a.rrf || b.result.time - a.result.time)
-      .slice(offset, offset + limit)
-      .map((entry) => ({ ...entry.result, score: entry.rrf }))
   }
 
   private segmentResult(row: SearchSegmentRow, snippet: string, score: number): SearchResult {
