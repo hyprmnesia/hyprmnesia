@@ -1,5 +1,11 @@
 # hyprmnesia
 
+## 0.1.2
+
+### Patch Changes
+
+- [#33](https://github.com/hyprmnesia/hyprmnesia/pull/33) [`6ac4796`](https://github.com/hyprmnesia/hyprmnesia/commit/6ac479688e011687415c4280cd92e76e0748aa30) Thanks [@julpel8](https://github.com/julpel8)! - Add a dummy changeset for main PR workflow testing.
+
 ## 0.1.1
 
 ### Patch Changes
