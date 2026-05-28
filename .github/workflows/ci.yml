@@ -14,6 +14,32 @@ permissions:
   contents: read
 
 jobs:
+  changeset:
+    name: Changeset
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request' && github.head_ref != 'changeset-release/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a changeset
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          changed_files="$(git diff --name-only "origin/$BASE_REF"...HEAD)"
+          echo "$changed_files"
+          if ! grep -Eq '^\.changeset/[^/]+\.md$' <<< "$changed_files"; then
+            echo "This PR must include at least one .changeset/*.md file." >&2
+            echo "Run \`bun changeset\`, or add a small changeset manually." >&2
+            exit 1
+          fi
+
   checks:
     name: checks
     runs-on: ubuntu-latest
