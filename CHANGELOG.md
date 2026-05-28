@@ -1,5 +1,11 @@
 # hyprmnesia
 
+## 0.1.3
+
+### Patch Changes
+
+- [#51](https://github.com/hyprmnesia/hyprmnesia/pull/51) [`f5e3881`](https://github.com/hyprmnesia/hyprmnesia/commit/f5e388152f049cfb4e087ba9079c159f62542cdc) Thanks [@julpel8](https://github.com/julpel8)! - Require pull requests to include at least one changeset so release notes stay complete.
+
 ## 0.1.2
 
 ### Patch Changes
