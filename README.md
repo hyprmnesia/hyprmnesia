@@ -97,7 +97,7 @@ bun run src/cli.ts start      # same as above
 bun run src/cli.ts tui        # open the TUI
 bun run src/cli.ts logs       # tail the daemon log (default: last 10 + follow)
 bun run src/cli.ts stop       # stop the daemon
-bun run src/cli.ts quit       # quit the tray icon only
+bun run src/cli.ts quit       # stop the daemon and quit the tray icon
 bun run src/cli.ts status     # print daemon status
 bun run src/cli.ts status --json
 bun run src/cli.ts mcp        # run the read-only MCP stdio server
@@ -112,7 +112,7 @@ bun run build                 # produces dist/hpm
 ./dist/hpm start              # same as above
 ./dist/hpm tui                # open the TUI
 ./dist/hpm logs -n 50         # show last 50 log lines + follow
-./dist/hpm quit               # quit the tray icon only
+./dist/hpm quit               # stop the daemon and quit the tray icon
 ./dist/hpm status --json
 ./dist/hpm mcp                # read-only MCP stdio server
 ./dist/hpm replay             # open the local browser replay viewer
@@ -235,10 +235,10 @@ Tray menu:
 - `Stop daemon`: stops background captures
 - `Open log folder`: opens `~/.hyprmnesia/`
 - `Enable launch at login` / `Disable launch at login`
-- `Quit Hyprmnesia`: removes the tray icon only; it does not stop captures
+- `Quit Hyprmnesia`: stops background captures, then removes the tray icon
 
-`hpm quit` performs the same tray-only quit from the CLI. `hpm stop` stops the
-daemon and does not launch or relaunch the tray.
+`hpm quit` performs the same full shutdown from the CLI. `hpm stop` stops the
+daemon without requesting a tray exit.
 
 ## Daemon Model
 

@@ -412,13 +412,13 @@ function cmdStop() {
 }
 
 /**
- * Requests a graceful tray quit. Pair with `cmdStop()` for a full shutdown —
- * the `quit` command stops the daemon first, then signals the tray.
+ * Stops the daemon, then requests a graceful tray quit.
  *
  * The native tray consumes the quit sentinel on its next refresh tick and
  * exits its event loop.
  */
 function cmdQuit() {
+  cmdStop()
   const r = requestTrayQuit()
   if (r.requested) console.log(`tray quit requested (pid ${r.pid})`)
   else console.log('no tray running')
@@ -643,7 +643,6 @@ switch (cmd) {
     cmdStop()
     break
   case 'quit':
-    cmdStop()
     cmdQuit()
     break
   case 'status':
