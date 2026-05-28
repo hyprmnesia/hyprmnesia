@@ -16,11 +16,21 @@ function freshStore() {
   return { dbPath, store }
 }
 
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+        break
+      } catch {
+        if (attempt === 9) break
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+    }
+  }
 })
 
-test('search falls back to FTS5 for hybrid mode when no vector index is present', () => {
+test('search falls back to FTS5 for hybrid mode when no query vector is present', () => {
   const { dbPath, store } = freshStore()
   const chunkId = randomUUIDv7()
   store.insert({
@@ -35,9 +45,6 @@ test('search falls back to FTS5 for hybrid mode when no vector index is present'
   store.close()
 
   const read = new HyprmnesiaReadStore(dbPath)
-  // No native sqlite-vec library in the test environment.
-  expect(read.vecReady).toBe(false)
-
   const hybrid = read.search('invoice', { mode: 'hybrid' })
   expect(hybrid.map((r) => r.id)).toContain(chunkId)
 

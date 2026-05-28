@@ -48,6 +48,9 @@ interface McpConfig {
   transport: 'stdio' | 'http'
   bind: string
   port: number
+  auth: {
+    enabled: boolean
+  }
 }
 
 export interface Config {
@@ -121,6 +124,9 @@ const defaultConfig: Config = {
     transport: 'stdio',
     bind: '127.0.0.1',
     port: 37373,
+    auth: {
+      enabled: true,
+    },
   },
 }
 
@@ -208,6 +214,12 @@ function normalizeConfig(config: Config): Config {
   config.mcp.bind = config.mcp.bind.trim()
   if (!Number.isFinite(config.mcp.port)) config.mcp.port = defaultConfig.mcp.port
   config.mcp.port = Math.max(1, Math.min(65535, Math.trunc(config.mcp.port)))
+  if (!config.mcp.auth || typeof config.mcp.auth !== 'object') {
+    config.mcp.auth = { ...defaultConfig.mcp.auth }
+  }
+  if (typeof config.mcp.auth.enabled !== 'boolean') {
+    config.mcp.auth.enabled = defaultConfig.mcp.auth.enabled
+  }
   return config
 }
 

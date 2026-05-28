@@ -133,13 +133,19 @@ Example MCP client config:
 ```json
 {
   "command": "hpm",
-  "args": ["mcp"]
+  "args": ["mcp"],
+  "env": {
+    "HPM_MCP_TOKEN": "hpm_mcp_..."
+  }
 }
 ```
 
 During development:
 
 ```sh
+hpm mcp auth setup
+hpm mcp auth status
+hpm mcp auth rotate
 bun run src/cli.ts mcp
 bun run src/cli.ts mcp --db ~/.hyprmnesia/index.db
 bun run src/cli.ts mcp --transport http --bind 127.0.0.1 --port 37373
@@ -152,11 +158,21 @@ mcp:
   transport: stdio # stdio | http
   bind: 127.0.0.1
   port: 37373
+  auth:
+    enabled: true
 ```
 
 `stdio` is the default transport for desktop MCP clients. `http` is available
-for local integrations at `POST /mcp`; until MCP auth lands, Hyprmnesia refuses
-non-local HTTP binds such as `0.0.0.0`.
+for local integrations at `POST /mcp`; Hyprmnesia still refuses non-local HTTP
+binds such as `0.0.0.0`.
+
+MCP auth is enabled by default. `hpm mcp auth setup` stores a local token
+verifier and prints the token once; put that token in `HPM_MCP_TOKEN` for stdio
+clients. HTTP clients can send `Authorization: Bearer <token>` or
+`X-Hyprmnesia-MCP-Token: <token>`. To run without MCP auth for local
+development, set `mcp.auth.enabled: false` in `config.yaml` and pass
+`hpm mcp --no-auth`. Auth gates `tools/call`; `initialize` and `tools/list`
+remain available so MCP clients can negotiate with the server.
 
 Available tools:
 
@@ -343,6 +359,8 @@ mcp:
   transport: stdio
   bind: 127.0.0.1
   port: 37373
+  auth:
+    enabled: true
 ```
 
 OCR engines: `auto`, `native`, `tesseract`, `noop`.
