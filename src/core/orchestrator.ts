@@ -4,9 +4,11 @@ import { startScreenCapture } from '../capture/screen'
 import type { Config } from '../config'
 import { EmbeddingQueue } from '../process/embedding_queue'
 import { makeEmbedding } from '../process/embeddings'
+import { createEmbeddingService, type EmbeddingService } from '../process/embeddings/service'
 import { makeOcr } from '../process/ocr'
 import { makeTranscription } from '../process/transcription'
 import { TranscriptionQueue } from '../process/transcription_queue'
+import type { EmbeddingEngine, EmbeddingStatus } from '../process/types'
 import { makeBlobStore } from '../store/blobs'
 import { openChunkStore } from '../store/db'
 import { defaultDbPath } from '../util/paths'
@@ -43,6 +45,25 @@ interface Runner {
   done: Promise<void>
 }
 
+// Boots the embedding engine once for the daemon so the embedding queue and
+// the shared embed service can share a single hpm-embed worker. Status events
+// are forwarded to the orchestrator event bus.
+async function startSharedEmbedding(engine: EmbeddingEngine, events: EventBus): Promise<boolean> {
+  if (!(await engine.ready())) return false
+  await engine.start({
+    onStatus: (status: EmbeddingStatus) => {
+      events.publish({
+        type: 'embedding_status',
+        at: Date.now(),
+        status: status.status,
+        engine: status.engine,
+        message: status.message,
+      })
+    },
+  })
+  return true
+}
+
 function embeddingQueueOptions(cfg: Config) {
   const opts = cfg.processing.embeddings.options ?? {}
   const rawSources = Array.isArray(opts.sources) ? opts.sources : ['screen', 'mic', 'system']
@@ -66,6 +87,8 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
   const embedding = makeEmbedding(cfg.processing.embeddings, events)
   let transcriptionQueue: TranscriptionQueue | undefined
   let embeddingQueue: EmbeddingQueue | undefined
+  let embeddingService: EmbeddingService | undefined
+  let embeddingStarted = false
 
   let running = false
   let stopping: Promise<void> | undefined
@@ -113,8 +136,43 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
     transcriptionQueue = new TranscriptionQueue(transcription, store, events)
     await transcriptionQueue.start()
 
-    embeddingQueue = new EmbeddingQueue(embedding, store, events, embeddingQueueOptions(cfg))
-    await embeddingQueue.start()
+    if (!store.vecEnabled) {
+      events.publish({
+        type: 'log',
+        at: Date.now(),
+        level: 'info',
+        message: 'semantic index unavailable (sqlite-vec not loaded); embeddings disabled',
+      })
+    } else {
+      embeddingStarted = await startSharedEmbedding(embedding, events)
+      if (embeddingStarted) {
+        embeddingQueue = new EmbeddingQueue(embedding, store, events, {
+          ...embeddingQueueOptions(cfg),
+          manageEngineLifecycle: false,
+        })
+        await embeddingQueue.start()
+
+        embeddingService = createEmbeddingService(embedding, events)
+        try {
+          await embeddingService.start()
+        } catch (err) {
+          events.publish({
+            type: 'log',
+            at: Date.now(),
+            level: 'warn',
+            message: `embed service failed to start: ${String(err)}`,
+          })
+          embeddingService = undefined
+        }
+      } else {
+        events.publish({
+          type: 'log',
+          at: Date.now(),
+          level: 'info',
+          message: `embedding engine '${embedding.name}' not ready; indexing & shared embed disabled`,
+        })
+      }
+    }
 
     const wantSckScreen = process.platform === 'darwin' && cfg.capture.screen.enabled
     const wantSckSystemAudio = process.platform === 'darwin' && cfg.capture.audio.system.enabled
@@ -194,7 +252,20 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
         sck = undefined
       }
       await activeQueue?.stop()
+      const activeService = embeddingService
+      embeddingService = undefined
+      if (activeService) {
+        try {
+          await activeService.stop()
+        } catch {}
+      }
       await activeEmbeddingQueue?.stop()
+      if (embeddingStarted) {
+        embeddingStarted = false
+        try {
+          await embedding.stop()
+        } catch {}
+      }
       closeStore()
       events.publish({
         type: 'log',

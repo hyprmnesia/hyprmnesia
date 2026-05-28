@@ -13,6 +13,11 @@ export interface EmbeddingQueueOptions {
   dim: number
   batchSize: number
   sources: Source[]
+  // When false, the engine is started/stopped by the caller (the orchestrator
+  // owns it so the shared embed service can use the same worker). When true
+  // or omitted, the queue manages engine lifecycle itself, preserving the
+  // original standalone behavior.
+  manageEngineLifecycle?: boolean
 }
 
 const IDLE_SLEEP_MS = 5_000
@@ -40,24 +45,33 @@ export class EmbeddingQueue {
       this.log('info', 'semantic index unavailable (sqlite-vec not loaded); embeddings disabled')
       return
     }
-    if (!(await this.engine.ready())) {
-      this.log('info', `embedding engine '${this.engine.name}' not ready; embeddings disabled`)
+    const manageLifecycle = this.opts.manageEngineLifecycle !== false
+    if (manageLifecycle) {
+      if (!(await this.engine.ready())) {
+        this.log('info', `embedding engine '${this.engine.name}' not ready; embeddings disabled`)
+        return
+      }
+      await this.engine.start({ onStatus: (status) => this.handleStatus(status) })
+    } else if (this.engine.dim <= 0) {
+      this.log('info', `embedding engine '${this.engine.name}' inactive; embeddings disabled`)
       return
     }
-    await this.engine.start({ onStatus: (status) => this.handleStatus(status) })
     this.running = true
     this.loopDone = this.loop()
   }
 
   async stop(): Promise<void> {
+    const manageLifecycle = this.opts.manageEngineLifecycle !== false
     if (!this.running) {
-      await this.engine.stop().catch(() => {})
+      if (manageLifecycle) await this.engine.stop().catch(() => {})
       return
     }
     this.running = false
     this.wake?.()
     await this.loopDone?.catch(() => {})
-    await this.engine.stop().catch((err) => this.log('warn', `embed stop failed: ${err}`))
+    if (manageLifecycle) {
+      await this.engine.stop().catch((err) => this.log('warn', `embed stop failed: ${err}`))
+    }
   }
 
   private async loop(): Promise<void> {

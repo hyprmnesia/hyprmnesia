@@ -1,5 +1,11 @@
 import { loadConfig } from '../config'
+import { isDaemonAlive } from '../core/daemon'
 import { makeEmbedding } from '../process/embeddings'
+import {
+  EmbedRpcUnavailable,
+  openSharedEmbeddingClient,
+  type SharedEmbeddingClient,
+} from '../process/embeddings/client'
 import type { EmbeddingEngine } from '../process/types'
 import { defaultDbPath, expandHome } from '../util/paths'
 import { VERSION } from '../version'
@@ -196,54 +202,142 @@ interface ToolResult {
 // read store transparently falls back to FTS5.
 type QueryEncoder = (text: string) => Promise<Float32Array | undefined>
 
-// Owns a single warm embedding worker for the lifetime of the MCP server.
-// `warm()` kicks off the engine at server boot so the first query doesn't pay
-// the model-load cost; a failed attempt clears the cached promise so a later
-// request retries instead of disabling semantic search for the whole session.
-function makeQueryEncoder(): {
+interface QueryEncoderDeps {
+  // Hooks let tests substitute the daemon-RPC client, the daemon-liveness probe,
+  // and the standalone engine factory without touching globals.
+  openShared?: () => Promise<SharedEmbeddingClient>
+  daemonAlive?: () => boolean
+  makeLocalEngine?: () => EmbeddingEngine | undefined
+}
+
+// Selects how query embeddings are produced. Order:
+//   1. If the daemon advertises an embed endpoint, use its shared worker.
+//   2. Otherwise, if the daemon is alive (no endpoint yet, or endpoint stale),
+//      degrade to FTS5 - refuse to spawn a duplicate hpm-embed.
+//   3. Otherwise (no daemon), fall back to a standalone local engine so
+//      `hpm mcp` keeps its existing semantic search.
+// `warm()` kicks off whichever path will be used so the first query doesn't
+// pay the connect / model-load cost.
+export function makeQueryEncoder(deps: QueryEncoderDeps = {}): {
   encode: QueryEncoder
   warm: () => void
   stop: () => Promise<void>
 } {
-  let engine: EmbeddingEngine | undefined
-  let startup: Promise<boolean> | undefined
-
-  async function ensure(): Promise<boolean> {
-    if (startup) return startup
-    const attempt = (async () => {
+  const openShared = deps.openShared ?? (() => openSharedEmbeddingClient())
+  const daemonAlive = deps.daemonAlive ?? (() => isDaemonAlive())
+  const makeLocalEngine =
+    deps.makeLocalEngine ??
+    (() => {
       try {
         const cfg = loadConfig()
-        const candidate = makeEmbedding(cfg.processing.embeddings)
-        if (candidate.dim <= 0 || !(await candidate.ready())) return false
+        return makeEmbedding(cfg.processing.embeddings)
+      } catch (err) {
+        console.error(`[hyprmnesia:mcp] failed to load embeddings config: ${String(err)}`)
+        return undefined
+      }
+    })
+
+  let sharedClient: SharedEmbeddingClient | undefined
+  let sharedAttempt: Promise<SharedEmbeddingClient | undefined> | undefined
+  let localEngine: EmbeddingEngine | undefined
+  let localStartup: Promise<boolean> | undefined
+  // Once we've decided to use FTS5 because the daemon is alive but no shared
+  // worker is reachable, stick with that for the rest of the session so we
+  // don't keep retrying socket connects under load.
+  let stickyFts5 = false
+
+  async function ensureShared(): Promise<SharedEmbeddingClient | undefined> {
+    if (sharedClient) return sharedClient
+    if (sharedAttempt) return sharedAttempt
+    const attempt = (async () => {
+      try {
+        const client = await openShared()
+        sharedClient = client
+        return client
+      } catch (err) {
+        if (!(err instanceof EmbedRpcUnavailable)) {
+          console.error(`[hyprmnesia:mcp] shared embed unavailable: ${String(err)}`)
+        }
+        return undefined
+      }
+    })()
+    sharedAttempt = attempt
+    const result = await attempt
+    sharedAttempt = undefined
+    return result
+  }
+
+  async function ensureLocal(): Promise<boolean> {
+    if (localEngine) return true
+    if (localStartup) return localStartup
+    const attempt = (async () => {
+      try {
+        const candidate = makeLocalEngine()
+        if (!candidate || candidate.dim <= 0 || !(await candidate.ready())) return false
         await candidate.start({ onStatus: () => {} })
-        engine = candidate
+        localEngine = candidate
         return true
       } catch (err) {
         console.error(`[hyprmnesia:mcp] semantic search unavailable: ${String(err)}`)
         return false
       }
     })()
-    startup = attempt
+    localStartup = attempt
     const ok = await attempt
-    if (!ok) startup = undefined
+    if (!ok) localStartup = undefined
     return ok
   }
 
-  return {
-    async encode(text) {
-      if (!(await ensure()) || !engine) return undefined
+  async function encode(text: string): Promise<Float32Array | undefined> {
+    if (stickyFts5) return undefined
+    const shared = await ensureShared()
+    if (shared) {
       try {
-        const [result] = await engine.embed([{ id: 'query', kind: 'query', text }])
-        return result?.vector
-      } catch {
-        return undefined
+        return await shared.encodeQuery(text)
+      } catch (err) {
+        sharedClient?.close()
+        sharedClient = undefined
+        console.error(`[hyprmnesia:mcp] shared embed failed: ${String(err)}`)
+        if (daemonAlive()) {
+          // Daemon is up but its embed worker is unhealthy or busy. Spawning a
+          // second worker here would violate the one-hpm-embed invariant, so
+          // we use FTS5 instead.
+          stickyFts5 = true
+          return undefined
+        }
+        // Daemon disappeared mid-flight; try the standalone fallback.
       }
-    },
+    } else if (daemonAlive()) {
+      // Daemon is alive but didn't expose a usable endpoint (still starting,
+      // engine disabled, or stale endpoint file). Same invariant as above.
+      stickyFts5 = true
+      return undefined
+    }
+    if (!(await ensureLocal()) || !localEngine) return undefined
+    try {
+      const [result] = await localEngine.embed([{ id: 'query', kind: 'query', text }])
+      return result?.vector
+    } catch {
+      return undefined
+    }
+  }
+
+  return {
+    encode,
     warm() {
-      void ensure().catch(() => undefined)
+      void ensureShared()
+        .then((shared) => {
+          if (shared) return
+          if (daemonAlive()) return
+          return ensureLocal()
+        })
+        .catch(() => undefined)
     },
     async stop() {
-      await engine?.stop().catch(() => {})
+      sharedClient?.close()
+      sharedClient = undefined
+      await localEngine?.stop().catch(() => {})
+      localEngine = undefined
     },
   }
 }
