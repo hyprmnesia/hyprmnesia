@@ -272,7 +272,7 @@ fn handle_menu_event(
             let _ = set_startup(&paths.hpm, !enabled);
         }
         "quit" => {
-            let _ = run_hpm(paths, &["stop"]);
+            let _ = run_hpm(paths, &["_stop"]);
             *control_flow = ControlFlow::Exit;
         }
         _ => {}

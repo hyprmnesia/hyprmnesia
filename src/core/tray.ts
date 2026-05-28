@@ -16,7 +16,7 @@ function removeIfExists(path: string): void {
   } catch {}
 }
 
-function trayPid(): number | undefined {
+export function trayPid(): number | undefined {
   if (!existsSync(TRAY_LOCK_FILE)) return undefined
   try {
     const raw = readFileSync(TRAY_LOCK_FILE, 'utf8').trim().split(/\r?\n/)[0]
@@ -35,6 +35,15 @@ function isPidAlive(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+export function isTrayAlive(): boolean {
+  const pid = trayPid()
+  if (pid === undefined) return false
+  if (isPidAlive(pid)) return true
+  removeIfExists(TRAY_LOCK_FILE)
+  removeIfExists(TRAY_STOP_FILE)
+  return false
 }
 
 export function requestTrayQuit(): { requested: boolean; pid?: number } {
