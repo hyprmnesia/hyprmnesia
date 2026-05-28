@@ -38,3 +38,18 @@ test('embeddings engine can be disabled with noop', () => {
   const cfg = loadConfig(tmpConfig('{"processing":{"embeddings":{"engine":"noop"}}}'))
   expect(cfg.processing.embeddings.engine).toBe('noop')
 })
+
+test('MCP auth is enabled by default', () => {
+  const cfg = loadConfig(tmpConfig('{}'))
+  expect(cfg.mcp.auth.enabled).toBe(true)
+})
+
+test('MCP auth can be explicitly disabled', () => {
+  const cfg = loadConfig(tmpConfig('{"mcp":{"auth":{"enabled":false}}}'))
+  expect(cfg.mcp.auth.enabled).toBe(false)
+})
+
+test('malformed MCP auth config falls back to enabled', () => {
+  const cfg = loadConfig(tmpConfig('{"mcp":{"auth":{"enabled":"nope"}}}'))
+  expect(cfg.mcp.auth.enabled).toBe(true)
+})

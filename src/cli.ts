@@ -19,6 +19,7 @@ import { subscribeLevelsFile, subscribeNdjsonStdout } from './core/logger'
 import { makeOrchestrator } from './core/orchestrator'
 import { requestTrayQuit } from './core/tray'
 import { log } from './log'
+import { createDefaultMcpAuthStore, mcpAuthStatus, rotateMcpAuth, setupMcpAuth } from './mcp/auth'
 import { VERSION } from './version'
 
 /**
@@ -33,8 +34,15 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
     const a = argv[i]
     if (!a) continue
     let key: string | undefined
-    if (a.startsWith('--')) key = a.slice(2)
-    else if (a.startsWith('-') && a.length > 1) key = a.slice(1)
+    if (a.startsWith('--')) {
+      const raw = a.slice(2)
+      const eq = raw.indexOf('=')
+      if (eq !== -1) {
+        out[raw.slice(0, eq)] = raw.slice(eq + 1)
+        continue
+      }
+      key = raw
+    } else if (a.startsWith('-') && a.length > 1) key = a.slice(1)
     else continue
     const next = argv[i + 1]
     if (next && !next.startsWith('-')) {
@@ -43,6 +51,26 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
     } else {
       out[key] = true
     }
+  }
+  return out
+}
+
+function positionalArgs(argv: string[], valueFlags: Set<string>): string[] {
+  const out: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (!arg) continue
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2)
+      if (valueFlags.has(key) && argv[i + 1] && !argv[i + 1]!.startsWith('-')) i++
+      continue
+    }
+    if (arg.startsWith('-') && arg.length > 1) {
+      const key = arg.slice(1)
+      if (valueFlags.has(key) && argv[i + 1] && !argv[i + 1]!.startsWith('-')) i++
+      continue
+    }
+    out.push(arg)
   }
   return out
 }
@@ -100,6 +128,7 @@ usage:
   hpm quit               stop the daemon and quit the tray icon
   hpm status [--json]    print daemon status
   hpm mcp [flags]        run the read-only MCP server
+  hpm mcp auth <command> manage MCP local auth token
   hpm replay [--from <time> --to <time>]
                          open an interactive local replay window
   hpm version            print version
@@ -124,6 +153,12 @@ flags (for hpm mcp):
   --transport <name>     MCP transport: stdio or http
   --bind <addr>          HTTP bind address (default: 127.0.0.1)
   --port <n>             HTTP port (default: 37373)
+  --no-auth              confirm running only when config mcp.auth.enabled=false
+
+commands (for hpm mcp auth):
+  setup                  create and print an MCP token once
+  status                 show MCP auth status without printing the token
+  rotate                 replace and print a new MCP token once
 
 flags (for hpm replay):
   --from <epoch_ms|iso>  replay start time (optional deep-link)
@@ -206,17 +241,75 @@ async function cmdTui() {
  * Unlike normal runtime commands, MCP is a headless integration surface and
  * should not depend on tray or daemon state.
  */
-async function cmdMcp(flags: Record<string, string | boolean>) {
+async function cmdMcp(flags: Record<string, string | boolean>, argv: string[]) {
+  const positionals = positionalArgs(argv, new Set(['config', 'db', 'transport', 'bind', 'port']))
+  if (positionals[0] === 'auth') {
+    cmdMcpAuth(positionals.slice(1), flags)
+    return
+  }
+
   const configPath = typeof flags['config'] === 'string' ? flags['config'] : undefined
   const cfg = loadConfig(configPath)
   applyMcpFlags(cfg, flags)
+  if (flags['no-auth'] && cfg.mcp.auth.enabled) {
+    console.error('mcp: --no-auth requires mcp.auth.enabled: false in config.yaml')
+    process.exit(1)
+  }
+  if (!cfg.mcp.auth.enabled && !flags['no-auth']) {
+    console.error('mcp: MCP auth is disabled in config.yaml; pass --no-auth to confirm')
+    process.exit(1)
+  }
   const { startMcpServer } = await import('./mcp/server')
   await startMcpServer({
     dbPath: typeof flags['db'] === 'string' ? flags['db'] : undefined,
     transport: cfg.mcp.transport,
     bind: cfg.mcp.bind,
     port: cfg.mcp.port,
+    auth: {
+      enabled: cfg.mcp.auth.enabled,
+    },
   })
+}
+
+function cmdMcpAuth(args: string[], flags: Record<string, string | boolean>): void {
+  const command = args[0]
+  const configPath = typeof flags['config'] === 'string' ? flags['config'] : undefined
+  const cfg = loadConfig(configPath)
+  const store = createDefaultMcpAuthStore()
+
+  if (command === 'setup') {
+    const result = setupMcpAuth(store)
+    if (result.alreadyConfigured) {
+      console.log('MCP auth token already configured.')
+      console.log('Run `hpm mcp auth rotate` to replace it.')
+      console.log(`backend: ${result.backend}`)
+      return
+    }
+    console.error('MCP auth token created. Copy it into your MCP client env as HPM_MCP_TOKEN.')
+    console.error(`backend: ${result.backend}`)
+    console.log(result.token)
+    return
+  }
+
+  if (command === 'status') {
+    const status = mcpAuthStatus(cfg.mcp.auth.enabled, store)
+    console.log(`MCP auth: ${status.enabled ? 'enabled' : 'disabled'}`)
+    console.log(`token: ${status.configured ? 'configured' : 'not configured'}`)
+    console.log(`backend: ${status.backend}`)
+    return
+  }
+
+  if (command === 'rotate') {
+    const result = rotateMcpAuth(store)
+    console.error('MCP auth token rotated. Copy it into your MCP client env as HPM_MCP_TOKEN.')
+    console.error(`backend: ${result.backend}`)
+    console.log(result.token)
+    return
+  }
+
+  console.error(`unknown MCP auth command: ${command ?? '(missing)'}`)
+  console.error('expected: setup, status, or rotate')
+  process.exit(1)
 }
 
 /**
@@ -564,7 +657,7 @@ switch (cmd) {
     await cmdSmokeRelease()
     break
   case 'mcp':
-    await cmdMcp(flags)
+    await cmdMcp(flags, rest)
     break
   case 'replay':
     ensureTray()

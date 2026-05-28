@@ -3,6 +3,14 @@ import { makeEmbedding } from '../process/embeddings'
 import type { EmbeddingEngine } from '../process/types'
 import { defaultDbPath, expandHome } from '../util/paths'
 import { VERSION } from '../version'
+import {
+  createDefaultMcpAuthStore,
+  isMcpAuthConfigured,
+  type McpAuthFailure,
+  type McpAuthStore,
+  mcpAuthFailureMessage,
+  verifyMcpToken,
+} from './auth'
 import { type JsonRpcId, type JsonRpcRequest, type JsonRpcResponse, StdioJsonRpc } from './protocol'
 import {
   clampLimit,
@@ -162,7 +170,20 @@ export interface McpServerOptions {
   transport?: 'stdio' | 'http'
   bind?: string
   port?: number
+  auth?: {
+    enabled?: boolean
+    store?: McpAuthStore
+    token?: string
+  }
 }
+
+export interface McpRuntimeAuth {
+  enabled: boolean
+  store: McpAuthStore
+  token?: string
+}
+
+type McpTransport = 'stdio' | 'http'
 
 interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -488,6 +509,42 @@ function failure(id: JsonRpcId, code: number, message: string, data?: unknown): 
   return { jsonrpc: '2.0', id, error: { code, message, ...(data !== undefined ? { data } : {}) } }
 }
 
+function authToolError(auth: McpRuntimeAuth): ToolResult | undefined {
+  if (!auth.enabled) return undefined
+  const result = verifyMcpToken(auth.token, auth.store)
+  if (result === true) return undefined
+  return {
+    content: [{ type: 'text', text: mcpAuthFailureMessage(result) }],
+    isError: true,
+  }
+}
+
+export function mcpAuthStartupWarnings(auth: McpRuntimeAuth, transport: McpTransport): string[] {
+  if (!auth.enabled) return ['MCP auth is disabled; tools/call is unprotected.']
+  if (!isMcpAuthConfigured(auth.store)) {
+    return ['MCP auth token is not configured. Run `hpm mcp auth setup` before using tools/call.']
+  }
+  if (transport !== 'stdio') return []
+  if (!auth.token) return ['HPM_MCP_TOKEN is not set; stdio tools/call requests will be refused.']
+  const result = verifyMcpToken(auth.token, auth.store)
+  if (result === true) return []
+  return [
+    `HPM_MCP_TOKEN is ${authFailureLabel(result)}; stdio tools/call requests will be refused.`,
+  ]
+}
+
+function logMcpAuthStartupWarnings(auth: McpRuntimeAuth, transport: McpTransport): void {
+  for (const warning of mcpAuthStartupWarnings(auth, transport)) {
+    console.error(`[hyprmnesia:mcp] warning: ${warning}`)
+  }
+}
+
+function authFailureLabel(reason: McpAuthFailure): string {
+  if (reason === 'missing_token') return 'missing'
+  if (reason === 'unconfigured') return 'not configured'
+  return 'invalid'
+}
+
 function protocolResult(method: string, params: unknown): unknown {
   if (method === 'initialize') {
     const requested = asRecord(params)['protocolVersion']
@@ -511,10 +568,11 @@ function protocolResult(method: string, params: unknown): unknown {
   return undefined
 }
 
-async function handleMessage(
+export async function handleMessage(
   dbPath: string,
   message: JsonRpcRequest,
   encodeQuery: QueryEncoder,
+  auth: McpRuntimeAuth,
 ): Promise<JsonRpcResponse | undefined> {
   const hasId = Object.hasOwn(message, 'id')
   const id = hasId ? (message.id ?? null) : null
@@ -531,6 +589,8 @@ async function handleMessage(
     const params = asRecord(message.params)
     const name = params['name']
     if (typeof name !== 'string') return failure(id, -32602, 'tools/call requires params.name')
+    const authError = authToolError(auth)
+    if (authError) return success(id, authError)
     try {
       return success(id, await callTool(dbPath, name, params['arguments'], encodeQuery))
     } catch (err) {
@@ -546,14 +606,18 @@ function isLocalBind(bind: string): boolean {
   return bind === '127.0.0.1' || bind === 'localhost' || bind === '::1' || bind === '[::1]'
 }
 
-async function startStdioMcpServer(dbPath: string, encodeQuery: QueryEncoder): Promise<void> {
+async function startStdioMcpServer(
+  dbPath: string,
+  encodeQuery: QueryEncoder,
+  auth: McpRuntimeAuth,
+): Promise<void> {
   console.error(
     `[hyprmnesia:mcp] starting read-only MCP server; transport=stdio; db=${dbPath}; tools=${TOOLS.length}`,
   )
 
   let rpc: StdioJsonRpc
   rpc = new StdioJsonRpc((message: JsonRpcRequest) => {
-    void handleMessage(dbPath, message, encodeQuery).then((response) => {
+    void handleMessage(dbPath, message, encodeQuery, auth).then((response) => {
       if (response) rpc.send(response)
     })
   })
@@ -566,9 +630,12 @@ async function startHttpMcpServer(
   bind: string,
   port: number,
   encodeQuery: QueryEncoder,
+  auth: McpRuntimeAuth,
 ): Promise<void> {
   if (!isLocalBind(bind)) {
-    throw new Error(`refusing non-local MCP bind ${bind}; auth is not implemented yet`)
+    throw new Error(
+      `refusing non-local MCP bind ${bind}; network MCP exposure is not supported yet`,
+    )
   }
 
   const server = Bun.serve({
@@ -590,8 +657,11 @@ async function startHttpMcpServer(
       }
       const batch = Array.isArray(body)
       const messages = (batch ? body : [body]) as JsonRpcRequest[]
+      const requestAuth = { ...auth, token: tokenFromHttpRequest(req) }
       const responses = (
-        await Promise.all(messages.map((message) => handleMessage(dbPath, message, encodeQuery)))
+        await Promise.all(
+          messages.map((message) => handleMessage(dbPath, message, encodeQuery, requestAuth)),
+        )
       ).filter((response): response is JsonRpcResponse => response !== undefined)
       if (responses.length === 0) return new Response(null, { status: 202 })
       return Response.json(batch ? responses : responses[0], {
@@ -613,21 +683,35 @@ async function startHttpMcpServer(
   })
 }
 
+function tokenFromHttpRequest(req: Request): string | undefined {
+  const authorization = req.headers.get('authorization')?.trim()
+  const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (bearer) return bearer
+  const header = req.headers.get('x-hyprmnesia-mcp-token')?.trim()
+  return header === '' ? undefined : header
+}
+
 export async function startMcpServer(options: McpServerOptions = {}): Promise<void> {
   const dbPath = expandHome(options.dbPath ?? defaultDbPath())
   const transport = options.transport ?? 'stdio'
   const bind = options.bind ?? '127.0.0.1'
   const port = options.port ?? 37373
+  const auth: McpRuntimeAuth = {
+    enabled: options.auth?.enabled ?? true,
+    store: options.auth?.store ?? createDefaultMcpAuthStore(),
+    token: options.auth?.token ?? process.env.HPM_MCP_TOKEN,
+  }
+  logMcpAuthStartupWarnings(auth, transport)
 
   const encoder = makeQueryEncoder()
   encoder.warm()
   try {
     if (transport === 'stdio') {
-      await startStdioMcpServer(dbPath, encoder.encode)
+      await startStdioMcpServer(dbPath, encoder.encode, auth)
       return
     }
     if (transport === 'http') {
-      await startHttpMcpServer(dbPath, bind, port, encoder.encode)
+      await startHttpMcpServer(dbPath, bind, port, encoder.encode, auth)
       return
     }
     throw new Error(`unsupported MCP transport: ${String(transport)}`)

@@ -269,6 +269,12 @@ export function settingsFields(config: Config): SettingField[] {
       max: 65535,
       hint: 'HTTP port',
     },
+    {
+      label: 'MCP auth',
+      path: ['mcp', 'auth', 'enabled'],
+      kind: 'bool',
+      hint: 'require local token',
+    },
   ]
 }
 
