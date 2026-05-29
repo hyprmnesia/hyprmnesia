@@ -1,5 +1,29 @@
 # hyprmnesia
 
+## 0.4.0
+
+### Minor Changes
+
+- [#64](https://github.com/hyprmnesia/hyprmnesia/pull/64) [`571d4df`](https://github.com/hyprmnesia/hyprmnesia/commit/571d4df556f1868e076dd0ab10ce4acb96e17606) Thanks [@julpel8](https://github.com/julpel8)! - Add user controls and automatic migration for encryption at rest.
+
+  - **Per-surface config flags**: `storage.encryption.database` and
+    `storage.encryption.blobs` (both default true) replace the single
+    `storage.encryption.enabled` flag, which is migrated automatically.
+  - **Automatic blob migration**: on daemon startup a one-time, marker-guarded
+    background sweep encrypts pre-existing plaintext blobs in place (atomic rename,
+    resumable, restricted to the capture-kind subdirectories so it never touches
+    the index DB or other files).
+  - **Encrypt-only daemon**: turning a flag off makes new data plaintext while
+    existing encrypted data stays readable via the keychain key; the daemon never
+    auto-decrypts.
+  - **CLI commands**: `hpm encrypt [--db] [--blobs]` and
+    `hpm decrypt [--db] [--blobs]` (no scope flag = both) convert data in place,
+    persist the matching config flags, and refuse to run while the daemon is alive.
+
+### Patch Changes
+
+- [#62](https://github.com/hyprmnesia/hyprmnesia/pull/62) [`c1930ef`](https://github.com/hyprmnesia/hyprmnesia/commit/c1930ef9aa0a615469e6bc0c1c8d2d48e3a909cd) Thanks [@julpel8](https://github.com/julpel8)! - Replace the app and tray logos with Hyprmnesia-branded assets, including the Windows executable and installer icon.
+
 ## 0.3.1
 
 ### Patch Changes
