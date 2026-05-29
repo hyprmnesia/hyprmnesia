@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { decryptBlob, deriveBlobKey, isEncryptedBlob } from '../../store/blob_crypto'
 import { type IndexDb, openReadIndexDb } from '../../store/index_db'
 import { loadVecExtension, serializeVector } from '../../store/vec'
 import { buildActivityGroups } from './activity'
@@ -93,6 +94,9 @@ export function rrfFuse(
 
 export class HyprmnesiaReadStore {
   private db: IndexDb
+  // Subkey for decrypting blobs on recall, derived from the same master key the
+  // DB was opened with. Undefined when encryption is disabled.
+  private readonly blobKey: Buffer | undefined
   // True when sqlite-vec loaded and the v3 vector tables exist. Vector search
   // silently falls back to FTS5 when false.
   readonly vecReady: boolean
@@ -101,6 +105,7 @@ export class HyprmnesiaReadStore {
     readonly dbPath: string,
     opts: { key?: Buffer } = {},
   ) {
+    this.blobKey = opts.key ? deriveBlobKey(opts.key) : undefined
     if (!existsSync(dbPath)) {
       throw new ReadStoreError(`index database not found at ${dbPath}`)
     }
@@ -429,9 +434,41 @@ export class HyprmnesiaReadStore {
       audio_rms_db: row.audio_rms_db,
       audio_peak_db: row.audio_peak_db,
       segments,
-      ...(includeBlob ? { blob_path: row.blob, mime_type: mimeForKind(row.kind, row.blob) } : {}),
+      ...(includeBlob ? this.blobFields(row) : {}),
     }
     return { found: true, chunk }
+  }
+
+  // Blob fields for `recall(include_blob)`. Always reports the on-disk path and
+  // mime type; for an encrypted blob it also inlines the decrypted bytes as
+  // base64 (and marks `encrypted: true`) so a client that can't read the
+  // ciphertext on disk still gets the content. Plaintext (legacy) blobs keep the
+  // path-only shape.
+  private blobFields(row: ChunkRow): {
+    blob_path: string
+    mime_type: string
+    encrypted?: boolean
+    blob_base64?: string
+  } {
+    const fields = { blob_path: row.blob, mime_type: mimeForKind(row.kind, row.blob) }
+    if (!existsSync(row.blob)) return fields
+    let raw: Buffer
+    try {
+      raw = readFileSync(row.blob)
+    } catch {
+      return fields
+    }
+    if (!isEncryptedBlob(raw)) return fields
+    if (!this.blobKey) return { ...fields, encrypted: true }
+    try {
+      return {
+        ...fields,
+        encrypted: true,
+        blob_base64: decryptBlob(this.blobKey, raw).toString('base64'),
+      }
+    } catch {
+      return { ...fields, encrypted: true }
+    }
   }
 
   getTranscriptSegment(id: string, includeChunk: boolean): SegmentResult {

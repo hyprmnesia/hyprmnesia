@@ -9,7 +9,7 @@ import { makeTranscription } from '../process/transcription'
 import { TranscriptionQueue } from '../process/transcription_queue'
 import { makeBlobStore } from '../store/blobs'
 import { openChunkStore } from '../store/db'
-import { resolveIndexKey } from '../store/db_key'
+import { resolveBlobKey, resolveIndexKey } from '../store/db_key'
 import { defaultDbPath } from '../util/paths'
 import { EventBus, type Source, type WindowContext } from './events'
 import { startWindowTracker, type WindowTracker } from './window-tracker'
@@ -60,7 +60,7 @@ function embeddingQueueOptions(cfg: Config) {
 
 export function makeOrchestrator(cfg: Config): Orchestrator {
   const events = new EventBus()
-  const blobs = makeBlobStore(cfg.storage.path)
+  const blobs = makeBlobStore(cfg.storage.path, { key: resolveBlobKey(cfg) })
   const store = openChunkStore(defaultDbPath(), { key: resolveIndexKey(cfg) })
   const ocr = makeOcr(cfg.processing.ocr)
   const transcription = makeTranscription(cfg.processing.transcription, events)

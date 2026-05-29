@@ -167,6 +167,10 @@ export interface RecallResult {
   chunk?: TimelineItem & {
     blob_path?: string
     mime_type?: string
+    // Set when the on-disk blob is encrypted at rest. `blob_base64` then carries
+    // the decrypted bytes inline so the client can read it without the key.
+    encrypted?: boolean
+    blob_base64?: string
     ocr_engine: string | null
     audio_engine: string | null
     audio_device: string | null
