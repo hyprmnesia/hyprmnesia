@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { randomUUIDv7 } from 'bun'
 import { HyprmnesiaReadStore } from '../mcp/read_store'
 import { openChunkStore } from './db'
+import { ensureDecrypted, isIndexDbEncrypted } from './index_db'
 import { sqliteCipherAvailable } from './sqlcipher/ffi'
 
 // These exercise the encrypted (FFI sqlite3mc) backend, so they need the native
@@ -119,5 +120,34 @@ describe.skipIf(!sqliteCipherAvailable())('encrypted index DB', () => {
     store.close()
 
     expect(() => new HyprmnesiaReadStore(dbPath, { key: randomBytes(32) })).toThrow()
+  })
+
+  test('ensureDecrypted turns an encrypted DB back to plaintext and stays searchable', () => {
+    const dbPath = join(freshDir(), 'index.db')
+    const key = randomBytes(32)
+    const store = openChunkStore(dbPath, { key })
+    const id = insertChunk(store, 'reversible secret note')
+    store.close()
+    expect(isIndexDbEncrypted(dbPath, key)).toBe(true)
+
+    ensureDecrypted(dbPath, key)
+    expect(isIndexDbEncrypted(dbPath, key)).toBe(false)
+    expect(plaintextReadFails(dbPath)).toBe(false)
+    expect(existsSync(`${dbPath}.dec.tmp`)).toBe(false)
+
+    const read = new HyprmnesiaReadStore(dbPath)
+    const results = read.search('reversible', { mode: 'lexical' })
+    read.close()
+    expect(results.map((r) => r.id)).toContain(id)
+  })
+
+  test('ensureDecrypted is a no-op on an already-plaintext DB', () => {
+    const dbPath = join(freshDir(), 'index.db')
+    const plain = openChunkStore(dbPath)
+    insertChunk(plain, 'plain note')
+    plain.close()
+
+    ensureDecrypted(dbPath, randomBytes(32)) // must not throw or corrupt
+    expect(plaintextReadFails(dbPath)).toBe(false)
   })
 })

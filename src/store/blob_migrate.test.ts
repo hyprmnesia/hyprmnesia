@@ -4,7 +4,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { encryptBlob, isEncryptedBlob, readBlobFile } from './blob_crypto'
-import { blobsMigrated, migrateBlobsIfNeeded, migrateBlobsToEncrypted } from './blob_migrate'
+import {
+  blobsMigrated,
+  decryptBlobsToPlaintext,
+  migrateBlobsIfNeeded,
+  migrateBlobsToEncrypted,
+} from './blob_migrate'
 
 function freshRoot(): string {
   return mkdtempSync(join(tmpdir(), 'hpm-blobmig-'))
@@ -101,6 +106,46 @@ test('leaves pre-encrypted blobs byte-identical in a mixed directory', async () 
     expect(res.skipped).toBe(1)
     expect(readFileSync(pEnc).equals(encOnDisk)).toBe(true) // not re-wrapped
     expect(readBlobFile(pPlain, key).equals(plainBytes)).toBe(true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('decrypt reverses encryption in place and clears the marker', async () => {
+  const dir = freshRoot()
+  try {
+    const key = randomBytes(32)
+    const png = randomBytes(1234)
+    const wav = randomBytes(5678)
+    const pPng = writeBlob(dir, 'screenshot', 'a.png', png)
+    const pWav = writeBlob(dir, 'audio_mic', 'b.wav', wav)
+
+    await migrateBlobsToEncrypted(dir, key)
+    expect(blobsMigrated(dir)).toBe(true)
+    expect(isEncryptedBlob(readFileSync(pPng))).toBe(true)
+
+    const res = await decryptBlobsToPlaintext(dir, key)
+    expect(res.decrypted).toBe(2)
+    expect(res.errors).toBe(0)
+    expect(isEncryptedBlob(readFileSync(pPng))).toBe(false)
+    expect(readFileSync(pPng).equals(png)).toBe(true)
+    expect(readFileSync(pWav).equals(wav)).toBe(true)
+    expect(blobsMigrated(dir)).toBe(false) // marker cleared
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('decrypt skips already-plaintext blobs', async () => {
+  const dir = freshRoot()
+  try {
+    const key = randomBytes(32)
+    const plain = randomBytes(400)
+    const p = writeBlob(dir, 'audio_system', 'a.wav', plain)
+    const res = await decryptBlobsToPlaintext(dir, key)
+    expect(res.decrypted).toBe(0)
+    expect(res.skipped).toBe(1)
+    expect(readFileSync(p).equals(plain)).toBe(true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

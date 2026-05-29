@@ -53,3 +53,30 @@ test('malformed MCP auth config falls back to enabled', () => {
   const cfg = loadConfig(tmpConfig('{"mcp":{"auth":{"enabled":"nope"}}}'))
   expect(cfg.mcp.auth.enabled).toBe(true)
 })
+
+test('encryption defaults to on for both database and blobs', () => {
+  const cfg = loadConfig(tmpConfig('{}'))
+  expect(cfg.storage.encryption.database).toBe(true)
+  expect(cfg.storage.encryption.blobs).toBe(true)
+})
+
+test('legacy encryption.enabled migrates to both database and blobs', () => {
+  const cfg = loadConfig(tmpConfig('{"storage":{"encryption":{"enabled":false}}}'))
+  expect(cfg.storage.encryption.database).toBe(false)
+  expect(cfg.storage.encryption.blobs).toBe(false)
+  expect((cfg.storage.encryption as Record<string, unknown>).enabled).toBeUndefined()
+})
+
+test('explicit split flags override the legacy enabled flag', () => {
+  const cfg = loadConfig(
+    tmpConfig('{"storage":{"encryption":{"enabled":true,"database":true,"blobs":false}}}'),
+  )
+  expect(cfg.storage.encryption.database).toBe(true)
+  expect(cfg.storage.encryption.blobs).toBe(false)
+})
+
+test('malformed encryption flags fall back to defaults (on)', () => {
+  const cfg = loadConfig(tmpConfig('{"storage":{"encryption":{"database":"nope"}}}'))
+  expect(cfg.storage.encryption.database).toBe(true)
+  expect(cfg.storage.encryption.blobs).toBe(true)
+})

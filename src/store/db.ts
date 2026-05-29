@@ -264,10 +264,16 @@ function ensureChunksAuTrigger(db: IndexDb): void {
   })()
 }
 
-export function openChunkStore(dbPath: string, opts: { key?: Buffer } = {}): ChunkStore {
+// `key` opens (and, by default, migrates) the DB encrypted. Pass `encrypt: false`
+// to open an already-encrypted DB with the key WITHOUT migrating a plaintext one
+// — used when database encryption is off but the existing file is still encrypted.
+export function openChunkStore(
+  dbPath: string,
+  opts: { key?: Buffer; encrypt?: boolean } = {},
+): ChunkStore {
   mkdirSync(dirname(dbPath), { recursive: true })
   // Migrate a legacy plaintext index.db to the encrypted format before opening.
-  if (opts.key) ensureEncrypted(dbPath, opts.key)
+  if (opts.key && opts.encrypt !== false) ensureEncrypted(dbPath, opts.key)
   const db = openIndexDb(dbPath, { create: true, key: opts.key })
   db.run('PRAGMA journal_mode = WAL')
   db.run('PRAGMA synchronous = NORMAL')

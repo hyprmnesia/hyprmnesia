@@ -2,7 +2,13 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, watch } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { type Config, ensureDefaultConfig, loadConfig } from './config'
+import {
+  type Config,
+  ensureDefaultConfig,
+  loadConfig,
+  loadConfigForEditing,
+  saveConfig,
+} from './config'
 import {
   clearStopRequest,
   daemonPid,
@@ -20,6 +26,11 @@ import { makeOrchestrator } from './core/orchestrator'
 import { isTrayAlive, requestTrayQuit } from './core/tray'
 import { log } from './log'
 import { createDefaultMcpAuthStore, mcpAuthStatus, rotateMcpAuth, setupMcpAuth } from './mcp/auth'
+import { deriveBlobKey } from './store/blob_crypto'
+import { decryptBlobsToPlaintext, migrateBlobsToEncrypted } from './store/blob_migrate'
+import { getOrCreateIndexKey, readIndexKey } from './store/db_key'
+import { ensureDecrypted, ensureEncrypted } from './store/index_db'
+import { defaultDbPath, expandHome } from './util/paths'
 import { VERSION } from './version'
 
 /**
@@ -127,6 +138,10 @@ usage:
   hpm stop               stop the running daemon
   hpm quit               stop the daemon and quit the tray icon
   hpm status [--json]    print daemon status
+  hpm encrypt [--db] [--blobs]
+                         encrypt the index DB and/or blobs at rest (default: both)
+  hpm decrypt [--db] [--blobs]
+                         decrypt the index DB and/or blobs (default: both)
   hpm mcp [flags]        run the read-only MCP server
   hpm mcp auth <command> manage MCP local auth token
   hpm replay [--from <time> --to <time>]
@@ -425,6 +440,66 @@ function cmdQuit() {
 }
 
 /**
+ * Encrypts or decrypts the index DB and/or blobs at rest, then persists the
+ * matching config flags so the daemon keeps the chosen state. With neither --db
+ * nor --blobs, both surfaces are converted. Refuses to run while the daemon is
+ * alive to avoid racing on the files it has open.
+ */
+async function cmdCrypto(mode: 'encrypt' | 'decrypt', flags: Record<string, string | boolean>) {
+  if (isDaemonAlive()) {
+    console.error(
+      `refusing to ${mode}: the daemon is running (pid ${daemonPid()}). Stop it first with \`hpm stop\`.`,
+    )
+    process.exit(1)
+  }
+  const scoped = flags['db'] === true || flags['blobs'] === true
+  const wantDb = !scoped || flags['db'] === true
+  const wantBlobs = !scoped || flags['blobs'] === true
+
+  // Edit the un-expanded config so saveConfig preserves the `~/...` storage path,
+  // but expand it for the actual filesystem sweep.
+  const cfg = loadConfigForEditing()
+  const storagePath = expandHome(cfg.storage.path)
+  const dbPath = defaultDbPath()
+
+  if (mode === 'encrypt') {
+    const key = getOrCreateIndexKey()
+    if (wantDb) {
+      ensureEncrypted(dbPath, key)
+      cfg.storage.encryption.database = true
+      console.log('index DB: encrypted')
+    }
+    if (wantBlobs) {
+      const r = await migrateBlobsToEncrypted(storagePath, deriveBlobKey(key))
+      cfg.storage.encryption.blobs = true
+      console.log(`blobs: ${r.encrypted} encrypted, ${r.skipped} already, ${r.errors} errors`)
+    }
+  } else {
+    const key = readIndexKey()
+    if (!key) {
+      console.error('no encryption key found in the keychain; nothing to decrypt.')
+      process.exit(1)
+    }
+    if (wantDb) {
+      ensureDecrypted(dbPath, key)
+      cfg.storage.encryption.database = false
+      console.log('index DB: decrypted')
+    }
+    if (wantBlobs) {
+      const r = await decryptBlobsToPlaintext(storagePath, deriveBlobKey(key))
+      cfg.storage.encryption.blobs = false
+      console.log(`blobs: ${r.decrypted} decrypted, ${r.skipped} already, ${r.errors} errors`)
+    }
+  }
+
+  saveConfig(cfg)
+  console.log(
+    `config: encryption.database=${cfg.storage.encryption.database}, ` +
+      `encryption.blobs=${cfg.storage.encryption.blobs}`,
+  )
+}
+
+/**
  * Builds the machine-readable daemon status payload used by `status --json`.
  */
 function statusPayload() {
@@ -652,6 +727,12 @@ switch (cmd) {
     break
   case '_status':
     cmdStatus(flags)
+    break
+  case 'encrypt':
+    await cmdCrypto('encrypt', flags)
+    break
+  case 'decrypt':
+    await cmdCrypto('decrypt', flags)
     break
   case '_smoke-release':
     await cmdSmokeRelease()

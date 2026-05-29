@@ -7,10 +7,12 @@ import { makeEmbedding } from '../process/embeddings'
 import { makeOcr } from '../process/ocr'
 import { makeTranscription } from '../process/transcription'
 import { TranscriptionQueue } from '../process/transcription_queue'
+import { deriveBlobKey } from '../store/blob_crypto'
 import { migrateBlobsIfNeeded } from '../store/blob_migrate'
 import { makeBlobStore } from '../store/blobs'
 import { openChunkStore } from '../store/db'
-import { resolveBlobKey, resolveIndexKey } from '../store/db_key'
+import { getOrCreateIndexKey, readIndexKey } from '../store/db_key'
+import { isIndexDbEncrypted } from '../store/index_db'
 import { defaultDbPath } from '../util/paths'
 import { EventBus, type Source, type WindowContext } from './events'
 import { startWindowTracker, type WindowTracker } from './window-tracker'
@@ -61,9 +63,22 @@ function embeddingQueueOptions(cfg: Config) {
 
 export function makeOrchestrator(cfg: Config): Orchestrator {
   const events = new EventBus()
-  const blobKey = resolveBlobKey(cfg)
+  // Index DB: encrypt (and migrate) when configured. When off, open the existing
+  // file as-is — with the key if it is still encrypted — but never auto-decrypt.
+  const dbPath = defaultDbPath()
+  let dbKey: Buffer | undefined
+  if (cfg.storage.encryption.database) {
+    dbKey = getOrCreateIndexKey()
+  } else {
+    const existing = readIndexKey()
+    if (existing && isIndexDbEncrypted(dbPath, existing)) dbKey = existing
+  }
+  const store = openChunkStore(dbPath, { key: dbKey, encrypt: cfg.storage.encryption.database })
+
+  // Blobs: encrypt new captures (and migrate old) when configured; otherwise write
+  // plaintext. Decryption of existing blobs is manual (`hpm decrypt --blobs`).
+  const blobKey = cfg.storage.encryption.blobs ? deriveBlobKey(getOrCreateIndexKey()) : undefined
   const blobs = makeBlobStore(cfg.storage.path, { key: blobKey })
-  const store = openChunkStore(defaultDbPath(), { key: resolveIndexKey(cfg) })
   const ocr = makeOcr(cfg.processing.ocr)
   const transcription = makeTranscription(cfg.processing.transcription, events)
   const embedding = makeEmbedding(cfg.processing.embeddings, events)

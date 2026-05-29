@@ -11,9 +11,9 @@
 // resumable; a completion marker lets later startups skip the rescan.
 
 import { type Dirent, existsSync } from 'node:fs'
-import { open, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { encryptBlob, hasBlobMagic, isEncryptedBlob } from './blob_crypto'
+import { decryptBlob, encryptBlob, hasBlobMagic, isEncryptedBlob } from './blob_crypto'
 
 // The capture kinds makeBlobStore partitions blobs under (see blobs.ts /
 // audio.ts:chunkKind). Anything outside these is left untouched.
@@ -100,4 +100,52 @@ export async function migrateBlobsIfNeeded(
 ): Promise<BlobMigrationResult | undefined> {
   if (blobsMigrated(rootDir)) return undefined
   return migrateBlobsToEncrypted(rootDir, key)
+}
+
+async function decryptInPlace(path: string, key: Buffer): Promise<'decrypted' | 'skipped'> {
+  const header = Buffer.alloc(4)
+  const fh = await open(path, 'r')
+  try {
+    await fh.read(header, 0, 4, 0)
+  } finally {
+    await fh.close()
+  }
+  if (!hasBlobMagic(header)) return 'skipped' // already plaintext
+
+  const enc = await readFile(path)
+  if (!isEncryptedBlob(enc)) return 'skipped'
+  const tmp = `${path}${TMP_SUFFIX}`
+  await writeFile(tmp, decryptBlob(key, enc))
+  await rename(tmp, path)
+  return 'decrypted'
+}
+
+export interface BlobDecryptResult {
+  scanned: number
+  decrypted: number
+  skipped: number
+  errors: number
+}
+
+// Reverse of migrateBlobsToEncrypted: turns every encrypted blob back to
+// plaintext in place (decrypt -> atomic rename). Removes the completion marker,
+// since the tree is no longer fully encrypted. Used by `hpm decrypt --blobs`.
+export async function decryptBlobsToPlaintext(
+  rootDir: string,
+  key: Buffer,
+): Promise<BlobDecryptResult> {
+  const result: BlobDecryptResult = { scanned: 0, decrypted: 0, skipped: 0, errors: 0 }
+  for (const kind of BLOB_KINDS) {
+    for await (const path of walkFiles(join(rootDir, kind))) {
+      if (path.endsWith(TMP_SUFFIX)) continue
+      result.scanned++
+      try {
+        result[await decryptInPlace(path, key)]++
+      } catch {
+        result.errors++
+      }
+    }
+  }
+  await rm(join(rootDir, MARKER), { force: true })
+  return result
 }
