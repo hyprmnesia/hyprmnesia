@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path'
 import { activeWindow } from 'get-windows'
 import type { WindowContext } from '../core/events'
 
+export { windowChanged } from './window_context'
+
 interface NativeWindow {
   title?: string
   url?: string
@@ -80,10 +82,4 @@ export async function snapshotWindow(): Promise<WindowContext | undefined> {
     ctx.url = w.url
   }
   return ctx
-}
-
-export function windowChanged(a: WindowContext | undefined, b: WindowContext | undefined): boolean {
-  if (!a && !b) return false
-  if (!a || !b) return true
-  return a.app !== b.app || a.title !== b.title || a.url !== b.url
 }
