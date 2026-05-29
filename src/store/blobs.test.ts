@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import { isEncryptedBlob, readBlobFile } from './blob_crypto'
 import { makeBlobStore } from './blobs'
 
 const dirs: string[] = []
@@ -37,17 +39,35 @@ test('path() zero-pads month and day without creating directories', () => {
   expect(existsSync(join(root, 'audio_mic'))).toBe(false)
 })
 
-test('write() writes bytes to the expected partition and returns the absolute path', async () => {
+test('write() writes plaintext when no key is given', async () => {
   const root = freshRoot()
   const store = makeBlobStore(root)
   const at = Date.UTC(2025, 6, 9)
+  const data = Buffer.from('hello plaintext')
   const expected = join(root, 'screenshot', '2025', '07', '09', 'img-1.jpg')
 
-  const written = await store.write('screenshot', 'img-1', 'jpg', Buffer.from('image-bytes'), at)
+  const written = await store.write('screenshot', 'img-1', 'jpg', data, at)
+  const onDisk = readFileSync(written)
 
   expect(written).toBe(expected)
   expect(isAbsolute(written)).toBe(true)
-  expect(readFileSync(expected, 'utf8')).toBe('image-bytes')
+  expect(isEncryptedBlob(onDisk)).toBe(false)
+  expect(onDisk.equals(data)).toBe(true)
+})
+
+test('write() encrypts on disk but round-trips via readBlobFile when keyed', async () => {
+  const root = freshRoot()
+  const key = randomBytes(32)
+  const store = makeBlobStore(root, { key })
+  const data = randomBytes(20_000)
+
+  const path = await store.write('audio_mic', 'id2', 'wav', data, Date.UTC(2025, 0, 2))
+  const onDisk = readFileSync(path)
+
+  expect(path).toBe(join(root, 'audio_mic', '2025', '01', '02', 'id2.wav'))
+  expect(isEncryptedBlob(onDisk)).toBe(true)
+  expect(onDisk.equals(data)).toBe(false)
+  expect(readBlobFile(path, key).equals(data)).toBe(true)
 })
 
 test('write() can reuse an existing partition directory', async () => {
@@ -58,8 +78,8 @@ test('write() can reuse an existing partition directory', async () => {
   const first = await store.write('audio_system', 'a', 'wav', Buffer.from('first'), at)
   const second = await store.write('audio_system', 'b', 'wav', Buffer.from('second'), at)
 
-  expect(readFileSync(first, 'utf8')).toBe('first')
-  expect(readFileSync(second, 'utf8')).toBe('second')
+  expect(readBlobFile(first).toString('utf8')).toBe('first')
+  expect(readBlobFile(second).toString('utf8')).toBe('second')
   expect(second).toBe(join(root, 'audio_system', '2025', '01', '02', 'b.wav'))
 })
 

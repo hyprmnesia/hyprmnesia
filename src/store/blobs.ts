@@ -1,9 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { encryptBlob } from './blob_crypto'
 
 export interface BlobStore {
   path(kind: string, id: string, ext: string, at?: number): string
   write(kind: string, id: string, ext: string, data: Buffer, at?: number): Promise<string>
+}
+
+export interface BlobStoreOptions {
+  // When set, blob contents are encrypted at rest (AES-256-GCM). The on-disk
+  // filename/extension is unchanged; encryption is detected by a magic header.
+  key?: Buffer
 }
 
 function partitionedDir(rootDir: string, kind: string, at = Date.now()): string {
@@ -22,7 +29,8 @@ async function ensureDir(dir: string): Promise<void> {
   }
 }
 
-export function makeBlobStore(rootDir: string): BlobStore {
+export function makeBlobStore(rootDir: string, opts: BlobStoreOptions = {}): BlobStore {
+  const { key } = opts
   return {
     path(kind, id, ext, at) {
       return join(partitionedDir(rootDir, kind, at), `${id}.${ext}`)
@@ -31,7 +39,7 @@ export function makeBlobStore(rootDir: string): BlobStore {
       const dir = partitionedDir(rootDir, kind, at)
       await ensureDir(dir)
       const path = join(dir, `${id}.${ext}`)
-      await writeFile(path, data)
+      await writeFile(path, key ? encryptBlob(key, data) : data)
       return path
     },
   }

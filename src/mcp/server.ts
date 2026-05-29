@@ -143,7 +143,9 @@ const TOOLS = [
         id: { type: 'string', description: 'Chunk id.' },
         include_blob: {
           type: 'boolean',
-          description: 'When true, include local blob_path, mime_type, and bytes.',
+          description:
+            'When true, include local blob_path and mime_type. For captures encrypted at ' +
+            'rest, also returns the decrypted bytes inline as blob_base64 with encrypted: true.',
         },
       },
       required: ['id'],

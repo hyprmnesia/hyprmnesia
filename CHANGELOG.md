@@ -1,5 +1,20 @@
 # hyprmnesia
 
+## 0.3.0
+
+### Minor Changes
+
+- [#58](https://github.com/hyprmnesia/hyprmnesia/pull/58) [`fd75eb7`](https://github.com/hyprmnesia/hyprmnesia/commit/fd75eb739ee48553308291194db24336f6289f5b) Thanks [@julpel8](https://github.com/julpel8)! - Encrypt captured blob files (screenshots & audio) at rest with AES-256-GCM.
+
+  New blobs written under `storage.path` are sealed in a whole-file AEAD envelope
+  using an HKDF-derived subkey of the existing index master key (one OS-keychain
+  entry, gated by the existing `storage.encryption.enabled` flag). The replay
+  server decrypts blobs in memory and remains Range-aware (audio scrubbing still
+  works), and MCP `recall(include_blob)` returns the decrypted bytes inline as
+  `blob_base64` with `encrypted: true`. Legacy plaintext blobs are detected by a
+  magic header and read transparently, so encrypted and plaintext captures coexist
+  with no migration.
+
 ## 0.2.0
 
 ### Minor Changes
