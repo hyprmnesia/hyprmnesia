@@ -1,5 +1,11 @@
 # hyprmnesia
 
+## 0.3.1
+
+### Patch Changes
+
+- [#60](https://github.com/hyprmnesia/hyprmnesia/pull/60) [`fc080ed`](https://github.com/hyprmnesia/hyprmnesia/commit/fc080edc542df44bb16f065ed08637db7c2b52e2) Thanks [@julpel8](https://github.com/julpel8)! - Add follow-up regression tests for blob storage, sqlite-vec, replay manifests, window tracking, and native sidecar helpers.
+
 ## 0.3.0
 
 ### Minor Changes
