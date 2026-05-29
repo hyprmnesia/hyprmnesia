@@ -37,6 +37,16 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+export function isTrayAlive(): boolean {
+  ensureHome()
+  const pid = trayPid()
+  if (pid === undefined) return false
+  if (isPidAlive(pid)) return true
+  removeIfExists(TRAY_LOCK_FILE)
+  removeIfExists(TRAY_STOP_FILE)
+  return false
+}
+
 export function requestTrayQuit(): { requested: boolean; pid?: number } {
   ensureHome()
   const pid = trayPid()

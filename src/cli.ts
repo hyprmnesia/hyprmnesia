@@ -17,7 +17,7 @@ import {
 } from './core/daemon'
 import { subscribeLevelsFile, subscribeNdjsonStdout } from './core/logger'
 import { makeOrchestrator } from './core/orchestrator'
-import { requestTrayQuit } from './core/tray'
+import { isTrayAlive, requestTrayQuit } from './core/tray'
 import { log } from './log'
 import { createDefaultMcpAuthStore, mcpAuthStatus, rotateMcpAuth, setupMcpAuth } from './mcp/auth'
 import { VERSION } from './version'
@@ -604,6 +604,7 @@ function ensureTray(
   opts: { autoStart?: boolean } = {},
 ) {
   ensureDefaultConfig(typeof flags['config'] === 'string' ? flags['config'] : undefined)
+  if (isTrayAlive()) return
   launchTray(flags, { autoStart: opts.autoStart ?? false })
 }
 
@@ -639,7 +640,6 @@ switch (cmd) {
     cmdLogs(flags)
     break
   case 'stop':
-    ensureTray()
     cmdStop()
     break
   case 'quit':
