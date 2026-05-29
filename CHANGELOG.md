@@ -1,5 +1,11 @@
 # hyprmnesia
 
+## 0.1.4
+
+### Patch Changes
+
+- [#53](https://github.com/hyprmnesia/hyprmnesia/pull/53) [`4eddc00`](https://github.com/hyprmnesia/hyprmnesia/commit/4eddc00025e538020d0809ba7191623a3713980d) Thanks [@julpel8](https://github.com/julpel8)! - Make Quit Hyprmnesia stop the daemon before exiting the tray.
+
 ## 0.1.3
 
 ### Patch Changes
