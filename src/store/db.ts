@@ -5,10 +5,10 @@
 // The DB lives at ~/.hyprmnesia/index.db. Blobs continue to live under
 // storage.path; this index just holds metadata + searchable text.
 
-import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { WindowContext } from '../core/events'
+import { ensureEncrypted, type IndexDb, openIndexDb } from './index_db'
 import { loadVecExtension, serializeVector } from './vec'
 
 type ChunkKind = 'screenshot' | 'audio_mic' | 'audio_system'
@@ -204,7 +204,7 @@ CREATE TABLE IF NOT EXISTS embedding_meta (
 );
 `
 
-function columnExists(db: Database, table: string, column: string): boolean {
+function columnExists(db: IndexDb, table: string, column: string): boolean {
   const rows = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all()
   return rows.some((row) => row.name === column)
 }
@@ -213,7 +213,7 @@ function columnExists(db: Database, table: string, column: string): boolean {
 // gated on the sqlite-vec extension: without it we stay at v2 and embeddings are
 // disabled, but capture/FTS5 keep working. The step is idempotent, so a later
 // run with the extension available will upgrade in place.
-function migrate(db: Database, vecLoaded: boolean): boolean {
+function migrate(db: IndexDb, vecLoaded: boolean): boolean {
   const row = db.query<{ user_version: number }, []>('PRAGMA user_version').get()
   const version = row?.user_version ?? 0
   if (version < 1) {
@@ -247,7 +247,7 @@ function migrate(db: Database, vecLoaded: boolean): boolean {
 // UPDATEs forced a full FTS re-index. CREATE TRIGGER IF NOT EXISTS in SCHEMA_V1
 // won't replace the existing trigger; DROP + CREATE on every open is cheap and
 // idempotent.
-function ensureChunksAuTrigger(db: Database): void {
+function ensureChunksAuTrigger(db: IndexDb): void {
   db.transaction(() => {
     db.run('DROP TRIGGER IF EXISTS chunks_au')
     db.run(`CREATE TRIGGER chunks_au AFTER UPDATE ON chunks
@@ -264,9 +264,11 @@ function ensureChunksAuTrigger(db: Database): void {
   })()
 }
 
-export function openChunkStore(dbPath: string): ChunkStore {
+export function openChunkStore(dbPath: string, opts: { key?: Buffer } = {}): ChunkStore {
   mkdirSync(dirname(dbPath), { recursive: true })
-  const db = new Database(dbPath, { create: true })
+  // Migrate a legacy plaintext index.db to the encrypted format before opening.
+  if (opts.key) ensureEncrypted(dbPath, opts.key)
+  const db = openIndexDb(dbPath, { create: true, key: opts.key })
   db.run('PRAGMA journal_mode = WAL')
   db.run('PRAGMA synchronous = NORMAL')
   db.run('PRAGMA foreign_keys = ON')

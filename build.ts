@@ -45,6 +45,7 @@ import { copyFile, mkdir, readdir, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { $ } from 'bun'
 import ffmpegStaticPath from 'ffmpeg-static'
+import { ensureSqliteCipher } from './scripts/build-sqlcipher'
 
 const STUBS = new Set(['react-devtools-core', 'mock-aws-s3', 'aws-sdk', 'nock'])
 const COMPAT_THROTTLE = resolve('./node_modules/es-toolkit/dist/compat/function/throttle.mjs')
@@ -139,6 +140,10 @@ for (const name of await readdir(resolve('./target/release')).catch(() => [])) {
 }
 
 await fetchSqliteVec()
+
+// Mandatory: the encryption-capable SQLite engine for the index DB (#12).
+const sqlcipherLib = await ensureSqliteCipher(NATIVE_DEST_DIR)
+if (!sqlcipherLib) throw new Error('failed to produce sqlite3mc encryption library')
 
 console.log(`built dist/hpm with native helpers: ${NATIVE_BINS.join(', ')}`)
 

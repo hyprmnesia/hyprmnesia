@@ -1,6 +1,7 @@
 import { loadConfig } from '../config'
 import { makeEmbedding } from '../process/embeddings'
 import type { EmbeddingEngine } from '../process/types'
+import { resolveIndexKey } from '../store/db_key'
 import { defaultDbPath, expandHome } from '../util/paths'
 import { VERSION } from '../version'
 import {
@@ -381,6 +382,7 @@ async function callTool(
   name: string,
   rawArgs: unknown,
   encodeQuery: QueryEncoder,
+  key?: Buffer,
 ): Promise<ToolResult> {
   const args = asRecord(rawArgs)
   if (name === 'search') {
@@ -401,17 +403,20 @@ async function callTool(
     const source = normalizeSource(args['source'])
     const mode = normalizeMode(args['mode'])
     const queryVector = mode === 'lexical' ? undefined : await encodeQuery(query)
-    const results = withReadStore(dbPath, (store) =>
-      store.search(query, {
-        from,
-        to,
-        source,
-        app: typeof args['app'] === 'string' ? args['app'] : undefined,
-        mode,
-        queryVector,
-        limit: clampLimit(args['limit']),
-        offset: clampOffset(args['offset']),
-      }),
+    const results = withReadStore(
+      dbPath,
+      (store) =>
+        store.search(query, {
+          from,
+          to,
+          source,
+          app: typeof args['app'] === 'string' ? args['app'] : undefined,
+          mode,
+          queryVector,
+          limit: clampLimit(args['limit']),
+          offset: clampOffset(args['offset']),
+        }),
+      { key },
     )
     return {
       content: [{ type: 'text', text: linesForSearch(results) }],
@@ -424,15 +429,18 @@ async function callTool(
     const to = parseTimestamp(args['to'], 'to') ?? Date.now()
     const minutes = numberArg(args['minutes'], 5, 0.1, 1440)
     const from = to - Math.round(minutes * 60_000)
-    const groups = withReadStore(dbPath, (store) =>
-      store.recentActivity({
-        from,
-        to,
-        sources: normalizeSources(args['sources']),
-        app: typeof args['app'] === 'string' ? args['app'] : undefined,
-        includeEmpty: boolArg(args['include_empty'], false),
-        limit: clampLimit(args['limit'], 50),
-      }),
+    const groups = withReadStore(
+      dbPath,
+      (store) =>
+        store.recentActivity({
+          from,
+          to,
+          sources: normalizeSources(args['sources']),
+          app: typeof args['app'] === 'string' ? args['app'] : undefined,
+          includeEmpty: boolArg(args['include_empty'], false),
+          limit: clampLimit(args['limit'], 50),
+        }),
+      { key },
     )
     return {
       content: [{ type: 'text', text: linesForRecentActivity(groups) }],
@@ -455,16 +463,19 @@ async function callTool(
     if (from === undefined || to === undefined) throw new ReadStoreError('from and to are required')
     validateRange(from, to)
     const source = normalizeSource(args['source'])
-    const items = withReadStore(dbPath, (store) =>
-      store.timeline({
-        from,
-        to,
-        source,
-        app: typeof args['app'] === 'string' ? args['app'] : undefined,
-        includeEmpty: boolArg(args['include_empty'], false),
-        limit: clampLimit(args['limit']),
-        offset: clampOffset(args['offset']),
-      }),
+    const items = withReadStore(
+      dbPath,
+      (store) =>
+        store.timeline({
+          from,
+          to,
+          source,
+          app: typeof args['app'] === 'string' ? args['app'] : undefined,
+          includeEmpty: boolArg(args['include_empty'], false),
+          limit: clampLimit(args['limit']),
+          offset: clampOffset(args['offset']),
+        }),
+      { key },
     )
     return {
       content: [{ type: 'text', text: linesForTimeline(items) }],
@@ -475,8 +486,10 @@ async function callTool(
   if (name === 'recall') {
     rejectUnknownArgs(args, name, ['id', 'include_blob'])
     const id = stringArg(args, 'id')
-    const result = withReadStore(dbPath, (store) =>
-      store.recall(id, boolArg(args['include_blob'], false)),
+    const result = withReadStore(
+      dbPath,
+      (store) => store.recall(id, boolArg(args['include_blob'], false)),
+      { key },
     )
     const text =
       result.found && result.chunk
@@ -488,8 +501,10 @@ async function callTool(
   if (name === 'get_transcript_segment') {
     rejectUnknownArgs(args, name, ['id', 'include_chunk'])
     const id = stringArg(args, 'id')
-    const result = withReadStore(dbPath, (store) =>
-      store.getTranscriptSegment(id, boolArg(args['include_chunk'], true)),
+    const result = withReadStore(
+      dbPath,
+      (store) => store.getTranscriptSegment(id, boolArg(args['include_chunk'], true)),
+      { key },
     )
     const text =
       result.found && result.segment
@@ -573,6 +588,7 @@ export async function handleMessage(
   message: JsonRpcRequest,
   encodeQuery: QueryEncoder,
   auth: McpRuntimeAuth,
+  key?: Buffer,
 ): Promise<JsonRpcResponse | undefined> {
   const hasId = Object.hasOwn(message, 'id')
   const id = hasId ? (message.id ?? null) : null
@@ -592,7 +608,7 @@ export async function handleMessage(
     const authError = authToolError(auth)
     if (authError) return success(id, authError)
     try {
-      return success(id, await callTool(dbPath, name, params['arguments'], encodeQuery))
+      return success(id, await callTool(dbPath, name, params['arguments'], encodeQuery, key))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return success(id, { content: [{ type: 'text', text: message }], isError: true })
@@ -610,6 +626,7 @@ async function startStdioMcpServer(
   dbPath: string,
   encodeQuery: QueryEncoder,
   auth: McpRuntimeAuth,
+  key?: Buffer,
 ): Promise<void> {
   console.error(
     `[hyprmnesia:mcp] starting read-only MCP server; transport=stdio; db=${dbPath}; tools=${TOOLS.length}`,
@@ -617,7 +634,7 @@ async function startStdioMcpServer(
 
   let rpc: StdioJsonRpc
   rpc = new StdioJsonRpc((message: JsonRpcRequest) => {
-    void handleMessage(dbPath, message, encodeQuery, auth).then((response) => {
+    void handleMessage(dbPath, message, encodeQuery, auth, key).then((response) => {
       if (response) rpc.send(response)
     })
   })
@@ -631,6 +648,7 @@ async function startHttpMcpServer(
   port: number,
   encodeQuery: QueryEncoder,
   auth: McpRuntimeAuth,
+  key?: Buffer,
 ): Promise<void> {
   if (!isLocalBind(bind)) {
     throw new Error(
@@ -660,7 +678,7 @@ async function startHttpMcpServer(
       const requestAuth = { ...auth, token: tokenFromHttpRequest(req) }
       const responses = (
         await Promise.all(
-          messages.map((message) => handleMessage(dbPath, message, encodeQuery, requestAuth)),
+          messages.map((message) => handleMessage(dbPath, message, encodeQuery, requestAuth, key)),
         )
       ).filter((response): response is JsonRpcResponse => response !== undefined)
       if (responses.length === 0) return new Response(null, { status: 202 })
@@ -693,6 +711,8 @@ function tokenFromHttpRequest(req: Request): string | undefined {
 
 export async function startMcpServer(options: McpServerOptions = {}): Promise<void> {
   const dbPath = expandHome(options.dbPath ?? defaultDbPath())
+  // Read the index key from the OS keychain so encrypted DBs open without a prompt.
+  const key = resolveIndexKey(loadConfig())
   const transport = options.transport ?? 'stdio'
   const bind = options.bind ?? '127.0.0.1'
   const port = options.port ?? 37373
@@ -707,11 +727,11 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
   encoder.warm()
   try {
     if (transport === 'stdio') {
-      await startStdioMcpServer(dbPath, encoder.encode, auth)
+      await startStdioMcpServer(dbPath, encoder.encode, auth, key)
       return
     }
     if (transport === 'http') {
-      await startHttpMcpServer(dbPath, bind, port, encoder.encode, auth)
+      await startHttpMcpServer(dbPath, bind, port, encoder.encode, auth, key)
       return
     }
     throw new Error(`unsupported MCP transport: ${String(transport)}`)

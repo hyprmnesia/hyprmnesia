@@ -2,9 +2,9 @@
 // library, loading it onto a bun:sqlite connection, and (de)serializing vectors
 // as the compact little-endian float32 BLOB sqlite-vec expects.
 
-import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type { IndexDb } from './index_db'
 
 function libName(): string {
   if (process.platform === 'win32') return 'vec0.dll'
@@ -26,7 +26,7 @@ function findVecExtension(): string | undefined {
 
 // Loads sqlite-vec onto the connection. Returns true on success; on any failure
 // (missing library, load error) returns false so callers can degrade to FTS5.
-export function loadVecExtension(db: Database): boolean {
+export function loadVecExtension(db: IndexDb): boolean {
   const lib = findVecExtension()
   if (!lib) return false
   try {

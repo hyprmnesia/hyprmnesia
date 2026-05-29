@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { statSync } from 'node:fs'
+import { loadConfig } from '../config'
+import { resolveIndexKey } from '../store/db_key'
 import type { ReplayBlobRef, ReplayChunk, ReplayManifest } from './store'
 import { withReplayStore } from './store'
 
@@ -695,6 +697,8 @@ const REPLAY_HTML = String.raw`<!doctype html>
 export async function startReplayServer(options: ReplayServerOptions): Promise<void> {
   const authToken = token()
   const dbPath = options.dbPath
+  // Read the index key from the OS keychain so an encrypted DB opens transparently.
+  const key = resolveIndexKey(loadConfig())
   let activeBlobs = new Map<string, ReplayBlobRef>()
   let lastPing = Date.now()
   let hadPing = false
@@ -715,7 +719,7 @@ export async function startReplayServer(options: ReplayServerOptions): Promise<v
       }
       if (url.pathname === '/api/range') {
         try {
-          const bounds = withReplayStore(dbPath, (store) => store.bounds())
+          const bounds = withReplayStore(dbPath, (store) => store.bounds(), { key })
           return Response.json(bounds, { headers: noStoreHeaders() })
         } catch (err) {
           return new Response(err instanceof Error ? err.message : String(err), {
@@ -726,8 +730,10 @@ export async function startReplayServer(options: ReplayServerOptions): Promise<v
       }
       if (url.pathname === '/api/manifest') {
         try {
-          const data = withReplayStore(dbPath, (store) =>
-            store.load(url.searchParams.get('from'), url.searchParams.get('to')),
+          const data = withReplayStore(
+            dbPath,
+            (store) => store.load(url.searchParams.get('from'), url.searchParams.get('to')),
+            { key },
           )
           activeBlobs = data.blobs
           return Response.json(withBlobUrls(data.manifest, authToken), {

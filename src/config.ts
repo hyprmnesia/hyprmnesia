@@ -65,6 +65,12 @@ export interface Config {
   }
   storage: {
     path: string
+    // Encrypt the index DB at rest (SQLCipher via SQLite3MultipleCiphers). The
+    // master key lives in the OS keychain; an existing plaintext index.db is
+    // migrated in place on first start. See #12.
+    encryption: {
+      enabled: boolean
+    }
   }
   mcp: McpConfig
 }
@@ -119,6 +125,9 @@ const defaultConfig: Config = {
   },
   storage: {
     path: '~/.hyprmnesia/data',
+    encryption: {
+      enabled: true,
+    },
   },
   mcp: {
     transport: 'stdio',
@@ -205,6 +214,13 @@ function normalizeConfig(config: Config): Config {
       emb.options.model = DEFAULT_EMBEDDING_MODEL
       emb.options.dim = DEFAULT_EMBEDDING_DIM
     }
+  }
+
+  if (!config.storage.encryption || typeof config.storage.encryption !== 'object') {
+    config.storage.encryption = { ...defaultConfig.storage.encryption }
+  }
+  if (typeof config.storage.encryption.enabled !== 'boolean') {
+    config.storage.encryption.enabled = defaultConfig.storage.encryption.enabled
   }
 
   if (config.mcp.transport !== 'stdio' && config.mcp.transport !== 'http')
