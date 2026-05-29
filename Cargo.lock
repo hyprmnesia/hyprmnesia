@@ -1671,6 +1671,7 @@ dependencies = [
 name = "hpm-tray"
 version = "0.3.0"
 dependencies = [
+ "image",
  "notify-rust",
  "serde",
  "serde_json",
