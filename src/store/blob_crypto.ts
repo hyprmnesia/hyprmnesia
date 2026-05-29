@@ -50,6 +50,14 @@ export function isEncryptedBlob(buf: Buffer): boolean {
   return buf.length >= HEADER_LEN + TAG_LEN && buf.subarray(0, MAGIC.length).equals(MAGIC)
 }
 
+// Cheap magic-only sniff for the migration scan: checks just the leading bytes
+// (without the full IV+tag length guard isEncryptedBlob applies), so an
+// already-encrypted file can be skipped without reading it whole. Safe because
+// the formats we store (PNG/JPEG/WAV) never start with this magic.
+export function hasBlobMagic(headerBytes: Buffer): boolean {
+  return headerBytes.length >= MAGIC.length && headerBytes.subarray(0, MAGIC.length).equals(MAGIC)
+}
+
 export function decryptBlob(key: Buffer, file: Buffer): Buffer {
   if (!isEncryptedBlob(file)) throw new Error('not an encrypted hyprmnesia blob')
   const version = file[MAGIC.length]

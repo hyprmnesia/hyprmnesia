@@ -7,6 +7,7 @@ import { makeEmbedding } from '../process/embeddings'
 import { makeOcr } from '../process/ocr'
 import { makeTranscription } from '../process/transcription'
 import { TranscriptionQueue } from '../process/transcription_queue'
+import { migrateBlobsIfNeeded } from '../store/blob_migrate'
 import { makeBlobStore } from '../store/blobs'
 import { openChunkStore } from '../store/db'
 import { resolveBlobKey, resolveIndexKey } from '../store/db_key'
@@ -60,7 +61,8 @@ function embeddingQueueOptions(cfg: Config) {
 
 export function makeOrchestrator(cfg: Config): Orchestrator {
   const events = new EventBus()
-  const blobs = makeBlobStore(cfg.storage.path, { key: resolveBlobKey(cfg) })
+  const blobKey = resolveBlobKey(cfg)
+  const blobs = makeBlobStore(cfg.storage.path, { key: blobKey })
   const store = openChunkStore(defaultDbPath(), { key: resolveIndexKey(cfg) })
   const ocr = makeOcr(cfg.processing.ocr)
   const transcription = makeTranscription(cfg.processing.transcription, events)
@@ -116,6 +118,34 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
 
     embeddingQueue = new EmbeddingQueue(embedding, store, events, embeddingQueueOptions(cfg))
     await embeddingQueue.start()
+
+    // Encrypt any pre-existing plaintext blobs in the background (one-time, marker
+    // -guarded). New captures are already written encrypted, so this only needs to
+    // catch up on captures taken before encryption was enabled. Fire-and-forget so
+    // it never delays capture startup.
+    if (blobKey) {
+      migrateBlobsIfNeeded(cfg.storage.path, blobKey)
+        .then((res) => {
+          if (res && (res.encrypted > 0 || res.errors > 0)) {
+            events.publish({
+              type: 'log',
+              at: Date.now(),
+              level: res.errors > 0 ? 'warn' : 'info',
+              message:
+                `blob encryption migration: ${res.encrypted} encrypted, ` +
+                `${res.skipped} already encrypted, ${res.errors} errors (of ${res.scanned} files)`,
+            })
+          }
+        })
+        .catch((err) => {
+          events.publish({
+            type: 'log',
+            at: Date.now(),
+            level: 'warn',
+            message: `blob encryption migration failed: ${String(err)}`,
+          })
+        })
+    }
 
     const wantSckScreen = process.platform === 'darwin' && cfg.capture.screen.enabled
     const wantSckSystemAudio = process.platform === 'darwin' && cfg.capture.audio.system.enabled
