@@ -98,6 +98,9 @@ jobs:
       - name: Rust format check
         run: cargo fmt --all --check
 
+      - name: Build SQLite encryption library
+        run: bun run build:sqlcipher
+
       - name: Bun tests
         run: bun test
 

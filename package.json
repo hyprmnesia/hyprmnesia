@@ -12,6 +12,7 @@
     "dev": "bun run src/cli.ts",
     "start": "bun run src/cli.ts start",
     "build": "bun run build.ts",
+    "build:sqlcipher": "bun run scripts/build-sqlcipher.ts",
     "typecheck": "tsc --noEmit",
     "changeset": "changeset",
     "version-packages": "changeset version && bun run sync-version",

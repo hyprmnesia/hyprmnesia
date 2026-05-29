@@ -1,5 +1,5 @@
-import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
+import { type IndexDb, openReadIndexDb } from '../../store/index_db'
 import { loadVecExtension, serializeVector } from '../../store/vec'
 import { buildActivityGroups } from './activity'
 import {
@@ -92,17 +92,20 @@ export function rrfFuse(
 }
 
 export class HyprmnesiaReadStore {
-  private db: Database
+  private db: IndexDb
   // True when sqlite-vec loaded and the v3 vector tables exist. Vector search
   // silently falls back to FTS5 when false.
   readonly vecReady: boolean
 
-  constructor(readonly dbPath: string) {
+  constructor(
+    readonly dbPath: string,
+    opts: { key?: Buffer } = {},
+  ) {
     if (!existsSync(dbPath)) {
       throw new ReadStoreError(`index database not found at ${dbPath}`)
     }
     try {
-      this.db = new Database(dbPath, { readonly: true, create: false })
+      this.db = openReadIndexDb(dbPath, opts.key)
       this.db.run('PRAGMA query_only = ON')
       this.db.run('PRAGMA busy_timeout = 2000')
       const version =
@@ -448,8 +451,12 @@ export class HyprmnesiaReadStore {
   }
 }
 
-export function withReadStore<T>(dbPath: string, fn: (store: HyprmnesiaReadStore) => T): T {
-  const store = new HyprmnesiaReadStore(dbPath)
+export function withReadStore<T>(
+  dbPath: string,
+  fn: (store: HyprmnesiaReadStore) => T,
+  opts: { key?: Buffer } = {},
+): T {
+  const store = new HyprmnesiaReadStore(dbPath, opts)
   try {
     return fn(store)
   } finally {

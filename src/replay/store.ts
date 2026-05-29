@@ -1,4 +1,3 @@
-import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { parseTimestamp, ReadStoreError } from '../mcp/read_store'
 import {
@@ -10,6 +9,7 @@ import {
   windowFromRow,
 } from '../mcp/read_store/format'
 import type { ChunkRow, SegmentRow, WindowPayload } from '../mcp/read_store/types'
+import { type IndexDb, openReadIndexDb } from '../store/index_db'
 import { defaultDbPath, expandHome } from '../util/paths'
 
 export interface ReplayChunk {
@@ -176,13 +176,16 @@ function toReplaySegment(row: SegmentRow, from: number, durationMs: number): Rep
 }
 
 export class ReplayStore {
-  private db: Database
+  private db: IndexDb
 
-  constructor(readonly dbPath: string) {
+  constructor(
+    readonly dbPath: string,
+    opts: { key?: Buffer } = {},
+  ) {
     const expanded = expandHome(dbPath)
     if (!existsSync(expanded)) throw new ReadStoreError(`index database not found at ${expanded}`)
     try {
-      this.db = new Database(expanded, { readonly: true, create: false })
+      this.db = openReadIndexDb(expanded, opts.key)
       this.db.run('PRAGMA query_only = ON')
       this.db.run('PRAGMA busy_timeout = 2000')
       const version =
@@ -314,8 +317,12 @@ export class ReplayStore {
   }
 }
 
-export function withReplayStore<T>(dbPath: string | undefined, fn: (store: ReplayStore) => T): T {
-  const store = new ReplayStore(dbPath ?? defaultDbPath())
+export function withReplayStore<T>(
+  dbPath: string | undefined,
+  fn: (store: ReplayStore) => T,
+  opts: { key?: Buffer } = {},
+): T {
+  const store = new ReplayStore(dbPath ?? defaultDbPath(), opts)
   try {
     return fn(store)
   } finally {
