@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { statSync } from 'node:fs'
 import { loadConfig } from '../config'
-import { resolveIndexKey } from '../store/db_key'
+import { readBlobFile } from '../store/blob_crypto'
+import { resolveBlobKey, resolveIndexKey } from '../store/db_key'
+import { sliceRange } from './range'
 import type { ReplayBlobRef, ReplayChunk, ReplayManifest } from './store'
 import { withReplayStore } from './store'
 
@@ -22,6 +23,40 @@ function noStoreHeaders(extra: Record<string, string> = {}): Record<string, stri
     'Cache-Control': 'no-store',
     ...extra,
   }
+}
+
+// Serves a blob, decrypting it in memory when encrypted, and honouring Range
+// requests (used by the <audio> element for scrubbing). Decryption is whole-file
+// because GCM authenticates the entire payload; blobs are small enough that this
+// is cheap even when re-read for every seek.
+function serveBlob(req: Request, blob: ReplayBlobRef, key: Buffer | undefined): Response {
+  let data: Buffer
+  try {
+    data = readBlobFile(blob.path, key)
+  } catch {
+    return new Response('not found', { status: 404, headers: noStoreHeaders() })
+  }
+  const total = data.length
+  const range = sliceRange(total, req.headers.get('range'))
+  if (range) {
+    const body = data.subarray(range.start, range.end + 1)
+    return new Response(body, {
+      status: 206,
+      headers: noStoreHeaders({
+        'Content-Type': blob.mime_type,
+        'Content-Length': String(body.length),
+        'Content-Range': `bytes ${range.start}-${range.end}/${total}`,
+        'Accept-Ranges': 'bytes',
+      }),
+    })
+  }
+  return new Response(data, {
+    headers: noStoreHeaders({
+      'Content-Type': blob.mime_type,
+      'Content-Length': String(total),
+      'Accept-Ranges': 'bytes',
+    }),
+  })
 }
 
 function openUrl(url: string): void {
@@ -697,8 +732,10 @@ const REPLAY_HTML = String.raw`<!doctype html>
 export async function startReplayServer(options: ReplayServerOptions): Promise<void> {
   const authToken = token()
   const dbPath = options.dbPath
-  // Read the index key from the OS keychain so an encrypted DB opens transparently.
-  const key = resolveIndexKey(loadConfig())
+  // Read the keys from the OS keychain so an encrypted DB/blob opens transparently.
+  const cfg = loadConfig()
+  const key = resolveIndexKey(cfg)
+  const blobKey = resolveBlobKey(cfg)
   let activeBlobs = new Map<string, ReplayBlobRef>()
   let lastPing = Date.now()
   let hadPing = false
@@ -756,19 +793,7 @@ export async function startReplayServer(options: ReplayServerOptions): Promise<v
         const id = decodeURIComponent(blobMatch[1])
         const blob = activeBlobs.get(id)
         if (!blob) return new Response('not found', { status: 404, headers: noStoreHeaders() })
-        let stat
-        try {
-          stat = statSync(blob.path)
-        } catch {
-          return new Response('not found', { status: 404, headers: noStoreHeaders() })
-        }
-        return new Response(Bun.file(blob.path), {
-          headers: noStoreHeaders({
-            'Content-Type': blob.mime_type,
-            'Content-Length': String(stat.size),
-            'Accept-Ranges': 'bytes',
-          }),
-        })
+        return serveBlob(req, blob, blobKey)
       }
       return new Response('not found', { status: 404, headers: noStoreHeaders() })
     },

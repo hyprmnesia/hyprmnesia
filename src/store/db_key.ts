@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Config } from '../config'
 import { createSecretStore, type SecretStore } from '../util/secret_store'
+import { deriveBlobKey } from './blob_crypto'
 
 const KEY_BYTES = 32
 
@@ -44,4 +45,11 @@ export function getOrCreateIndexKey(): Buffer {
 // The key to open the index DB with, or undefined when encryption is disabled.
 export function resolveIndexKey(cfg: Config): Buffer | undefined {
   return cfg.storage.encryption.enabled ? getOrCreateIndexKey() : undefined
+}
+
+// The key to encrypt/decrypt captured blob files with, or undefined when
+// encryption is disabled. An HKDF subkey of the same master key as the index DB,
+// so blobs reuse the single OS-keychain entry without sharing raw key material.
+export function resolveBlobKey(cfg: Config): Buffer | undefined {
+  return cfg.storage.encryption.enabled ? deriveBlobKey(getOrCreateIndexKey()) : undefined
 }
