@@ -65,11 +65,14 @@ export interface Config {
   }
   storage: {
     path: string
-    // Encrypt the index DB at rest (SQLCipher via SQLite3MultipleCiphers). The
-    // master key lives in the OS keychain; an existing plaintext index.db is
-    // migrated in place on first start. See #12.
+    // Encrypt captured data at rest. The master key lives in the OS keychain.
+    // `database` controls the index DB (SQLCipher via SQLite3MultipleCiphers,
+    // #12); `blobs` controls screenshot/audio files (AES-256-GCM, #54). When a
+    // flag is on, existing plaintext data is migrated in place on start; when
+    // off, the daemon never auto-decrypts — use `hpm decrypt` for that.
     encryption: {
-      enabled: boolean
+      database: boolean
+      blobs: boolean
     }
   }
   mcp: McpConfig
@@ -126,7 +129,8 @@ const defaultConfig: Config = {
   storage: {
     path: '~/.hyprmnesia/data',
     encryption: {
-      enabled: true,
+      database: true,
+      blobs: true,
     },
   },
   mcp: {
@@ -178,7 +182,22 @@ function loadMergedConfig(path?: string): Config {
   ensureConfigFile(p)
   const raw = readFileSync(p, 'utf8')
   const parsed = parseConfig(raw, p)
+  migrateLegacyEncryption(parsed)
   return normalizeConfig(deepMerge(defaultConfig, parsed))
+}
+
+// Maps the legacy single `storage.encryption.enabled` flag (shipped in #56) onto
+// the split database/blobs flags on the raw config, BEFORE merging with defaults
+// — otherwise the defaults' database/blobs=true would mask the user's intent.
+function migrateLegacyEncryption(parsed: DeepPartial<Config>): void {
+  const enc = parsed.storage?.encryption as
+    | { enabled?: unknown; database?: unknown; blobs?: unknown }
+    | undefined
+  const legacy = typeof enc?.enabled === 'boolean' ? enc.enabled : undefined
+  if (!enc || legacy === undefined) return
+  if (typeof enc.database !== 'boolean') enc.database = legacy
+  if (typeof enc.blobs !== 'boolean') enc.blobs = legacy
+  enc.enabled = undefined
 }
 
 function normalizeConfig(config: Config): Config {
@@ -219,8 +238,24 @@ function normalizeConfig(config: Config): Config {
   if (!config.storage.encryption || typeof config.storage.encryption !== 'object') {
     config.storage.encryption = { ...defaultConfig.storage.encryption }
   }
-  if (typeof config.storage.encryption.enabled !== 'boolean') {
-    config.storage.encryption.enabled = defaultConfig.storage.encryption.enabled
+  {
+    // Migrate the legacy single `enabled` flag (shipped in #56) to the split
+    // database/blobs shape, then drop it.
+    const enc = config.storage.encryption as {
+      enabled?: unknown
+      database?: unknown
+      blobs?: unknown
+    }
+    const legacy = typeof enc.enabled === 'boolean' ? enc.enabled : undefined
+    const database =
+      typeof enc.database === 'boolean'
+        ? enc.database
+        : (legacy ?? defaultConfig.storage.encryption.database)
+    const blobs =
+      typeof enc.blobs === 'boolean'
+        ? enc.blobs
+        : (legacy ?? defaultConfig.storage.encryption.blobs)
+    config.storage.encryption = { database, blobs }
   }
 
   if (config.mcp.transport !== 'stdio' && config.mcp.transport !== 'http')

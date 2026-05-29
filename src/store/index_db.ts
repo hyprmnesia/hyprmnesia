@@ -101,6 +101,71 @@ function probe(path: string, key: Buffer): boolean {
   }
 }
 
+// Windows can keep a brief lock on a just-closed SQLite file (more so for an
+// encrypted one), so deleting it right after close transiently fails with EBUSY.
+// Retry with a short spin before surfacing the error.
+function rmFileWithRetry(target: string): void {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      rmSync(target, { force: true })
+      return
+    } catch {
+      const until = Date.now() + 25
+      while (Date.now() < until) {}
+    }
+  }
+  rmSync(target, { force: true }) // final attempt; surface the error if still locked
+}
+
+// Whether the index DB at `path` is encrypted with `key`. False when the file is
+// absent or plaintext; throws when it is encrypted with a different key. Lets the
+// writer decide how to open an existing DB when database encryption is off.
+export function isIndexDbEncrypted(path: string, key: Buffer): boolean {
+  if (!existsSync(path)) return false
+  return probe(path, key)
+}
+
+// Inverse of ensureEncrypted: turns an encrypted index DB back into plaintext in
+// place (copy -> PRAGMA rekey to empty -> atomic replace). No-op when the file is
+// absent or already plaintext. Used by `hpm decrypt --db`.
+export function ensureDecrypted(path: string, key: Buffer): void {
+  if (!existsSync(path)) return
+  if (!probe(path, key)) return // already plaintext
+
+  // Checkpoint so all committed data lives in the main file before copying.
+  {
+    const src = new CipherDatabase(path, { key })
+    try {
+      src.run('PRAGMA wal_checkpoint(TRUNCATE)')
+    } finally {
+      src.close()
+    }
+  }
+
+  const tmp = `${path}.dec.tmp`
+  rmSync(tmp, { force: true })
+  copyFileSync(path, tmp)
+
+  const dec = new CipherDatabase(tmp, { key })
+  try {
+    dec.run("PRAGMA cipher = 'sqlcipher';")
+    // An empty key removes encryption entirely (sqlite3mc), leaving a plaintext DB.
+    dec.run('PRAGMA rekey = "";')
+    dec.run('PRAGMA wal_checkpoint(TRUNCATE)')
+  } catch (err) {
+    dec.close()
+    rmSync(tmp, { force: true })
+    throw err
+  }
+  dec.close()
+
+  // Replace the encrypted original; drop its WAL sidecars.
+  rmSync(`${path}-wal`, { force: true })
+  rmSync(`${path}-shm`, { force: true })
+  rmFileWithRetry(path)
+  renameSync(tmp, path)
+}
+
 // Ensures the index DB at `path` is encrypted with `key`, migrating a legacy
 // plaintext database in place (copy -> rekey -> atomic replace). No-op when the
 // file is absent (it will be created encrypted) or already encrypted.
@@ -137,6 +202,6 @@ export function ensureEncrypted(path: string, key: Buffer): void {
   // Replace the plaintext original; drop its WAL sidecars.
   rmSync(`${path}-wal`, { force: true })
   rmSync(`${path}-shm`, { force: true })
-  rmSync(path, { force: true })
+  rmFileWithRetry(path)
   renameSync(tmp, path)
 }

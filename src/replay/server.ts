@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { loadConfig } from '../config'
 import { readBlobFile } from '../store/blob_crypto'
-import { resolveBlobKey, resolveIndexKey } from '../store/db_key'
+import { readBlobKey, readIndexKey } from '../store/db_key'
 import { sliceRange } from './range'
 import type { ReplayBlobRef, ReplayChunk, ReplayManifest } from './store'
 import { withReplayStore } from './store'
@@ -732,10 +731,10 @@ const REPLAY_HTML = String.raw`<!doctype html>
 export async function startReplayServer(options: ReplayServerOptions): Promise<void> {
   const authToken = token()
   const dbPath = options.dbPath
-  // Read the keys from the OS keychain so an encrypted DB/blob opens transparently.
-  const cfg = loadConfig()
-  const key = resolveIndexKey(cfg)
-  const blobKey = resolveBlobKey(cfg)
+  // Read the keys from the OS keychain (if any) so encrypted DB/blobs open
+  // transparently — independent of the current encryption flags.
+  const key = readIndexKey()
+  const blobKey = readBlobKey()
   let activeBlobs = new Map<string, ReplayBlobRef>()
   let lastPing = Date.now()
   let hadPing = false

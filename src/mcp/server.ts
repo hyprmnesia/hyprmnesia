@@ -1,7 +1,7 @@
 import { loadConfig } from '../config'
 import { makeEmbedding } from '../process/embeddings'
 import type { EmbeddingEngine } from '../process/types'
-import { resolveIndexKey } from '../store/db_key'
+import { readIndexKey } from '../store/db_key'
 import { defaultDbPath, expandHome } from '../util/paths'
 import { VERSION } from '../version'
 import {
@@ -713,8 +713,9 @@ function tokenFromHttpRequest(req: Request): string | undefined {
 
 export async function startMcpServer(options: McpServerOptions = {}): Promise<void> {
   const dbPath = expandHome(options.dbPath ?? defaultDbPath())
-  // Read the index key from the OS keychain so encrypted DBs open without a prompt.
-  const key = resolveIndexKey(loadConfig())
+  // Read the index key from the OS keychain (if any) so encrypted DBs open without
+  // a prompt. Read-only resolve: works whether or not encryption is currently on.
+  const key = readIndexKey()
   const transport = options.transport ?? 'stdio'
   const bind = options.bind ?? '127.0.0.1'
   const port = options.port ?? 37373

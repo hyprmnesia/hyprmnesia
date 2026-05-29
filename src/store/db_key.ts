@@ -5,7 +5,6 @@
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { Config } from '../config'
 import { createSecretStore, type SecretStore } from '../util/secret_store'
 import { deriveBlobKey } from './blob_crypto'
 
@@ -42,14 +41,21 @@ export function getOrCreateIndexKey(): Buffer {
   return key
 }
 
-// The key to open the index DB with, or undefined when encryption is disabled.
-export function resolveIndexKey(cfg: Config): Buffer | undefined {
-  return cfg.storage.encryption.enabled ? getOrCreateIndexKey() : undefined
+// Reads the existing master key from the keychain WITHOUT creating one. Used by
+// readers (MCP, replay) and when opening data that may already be encrypted even
+// if the corresponding flag is now off — so existing encrypted data stays
+// readable. Returns undefined when no key has ever been created.
+export function readIndexKey(): Buffer | undefined {
+  const existing = indexKeyStore().read()
+  if (!existing) return undefined
+  const buf = Buffer.from(existing.trim(), 'hex')
+  return buf.length === KEY_BYTES ? buf : undefined
 }
 
-// The key to encrypt/decrypt captured blob files with, or undefined when
-// encryption is disabled. An HKDF subkey of the same master key as the index DB,
-// so blobs reuse the single OS-keychain entry without sharing raw key material.
-export function resolveBlobKey(cfg: Config): Buffer | undefined {
-  return cfg.storage.encryption.enabled ? deriveBlobKey(getOrCreateIndexKey()) : undefined
+// The blob subkey derived from the existing master key, or undefined when none
+// exists. HKDF subkey of the index master key, so blobs reuse the single
+// OS-keychain entry without sharing raw key material.
+export function readBlobKey(): Buffer | undefined {
+  const master = readIndexKey()
+  return master ? deriveBlobKey(master) : undefined
 }
