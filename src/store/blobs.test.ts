@@ -1,41 +1,104 @@
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { isEncryptedBlob, readBlobFile } from './blob_crypto'
 import { makeBlobStore } from './blobs'
 
+const dirs: string[] = []
+
 function freshRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'hpm-blobs-'))
+  const dir = mkdtempSync(join(tmpdir(), 'hpm-blobs-'))
+  dirs.push(dir)
+  return dir
 }
 
-test('writes plaintext when no key is given', async () => {
-  const root = freshRoot()
-  try {
-    const store = makeBlobStore(root)
-    const data = Buffer.from('hello plaintext')
-    const path = await store.write('screenshot', 'id1', 'png', data, Date.now())
-    const onDisk = readFileSync(path)
-    expect(isEncryptedBlob(onDisk)).toBe(false)
-    expect(onDisk.equals(data)).toBe(true)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-test('encrypts on disk but round-trips via readBlobFile when keyed', async () => {
+test('path() partitions by UTC date at a timezone frontier', () => {
   const root = freshRoot()
-  try {
-    const key = randomBytes(32)
-    const store = makeBlobStore(root, { key })
-    const data = randomBytes(20_000)
-    const path = await store.write('audio_mic', 'id2', 'wav', data, Date.now())
-    const onDisk = readFileSync(path)
-    expect(isEncryptedBlob(onDisk)).toBe(true)
-    expect(onDisk.equals(data)).toBe(false)
-    expect(readBlobFile(path, key).equals(data)).toBe(true)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
+  const store = makeBlobStore(root)
+  const at = Date.parse('2024-12-31T23:30:00-01:00') // 2025-01-01T00:30:00Z
+
+  expect(store.path('screenshot', 'frontier', 'png', at)).toBe(
+    join(root, 'screenshot', '2025', '01', '01', 'frontier.png'),
+  )
+})
+
+test('path() zero-pads month and day without creating directories', () => {
+  const root = freshRoot()
+  const store = makeBlobStore(root)
+  const at = Date.UTC(2025, 2, 4, 12)
+  const path = store.path('audio_mic', 'chunk-1', 'wav', at)
+
+  expect(path).toBe(join(root, 'audio_mic', '2025', '03', '04', 'chunk-1.wav'))
+  expect(isAbsolute(path)).toBe(true)
+  expect(existsSync(join(root, 'audio_mic'))).toBe(false)
+})
+
+test('write() writes plaintext when no key is given', async () => {
+  const root = freshRoot()
+  const store = makeBlobStore(root)
+  const at = Date.UTC(2025, 6, 9)
+  const data = Buffer.from('hello plaintext')
+  const expected = join(root, 'screenshot', '2025', '07', '09', 'img-1.jpg')
+
+  const written = await store.write('screenshot', 'img-1', 'jpg', data, at)
+  const onDisk = readFileSync(written)
+
+  expect(written).toBe(expected)
+  expect(isAbsolute(written)).toBe(true)
+  expect(isEncryptedBlob(onDisk)).toBe(false)
+  expect(onDisk.equals(data)).toBe(true)
+})
+
+test('write() encrypts on disk but round-trips via readBlobFile when keyed', async () => {
+  const root = freshRoot()
+  const key = randomBytes(32)
+  const store = makeBlobStore(root, { key })
+  const data = randomBytes(20_000)
+
+  const path = await store.write('audio_mic', 'id2', 'wav', data, Date.UTC(2025, 0, 2))
+  const onDisk = readFileSync(path)
+
+  expect(path).toBe(join(root, 'audio_mic', '2025', '01', '02', 'id2.wav'))
+  expect(isEncryptedBlob(onDisk)).toBe(true)
+  expect(onDisk.equals(data)).toBe(false)
+  expect(readBlobFile(path, key).equals(data)).toBe(true)
+})
+
+test('write() can reuse an existing partition directory', async () => {
+  const root = freshRoot()
+  const store = makeBlobStore(root)
+  const at = Date.UTC(2025, 0, 2)
+
+  const first = await store.write('audio_system', 'a', 'wav', Buffer.from('first'), at)
+  const second = await store.write('audio_system', 'b', 'wav', Buffer.from('second'), at)
+
+  expect(readBlobFile(first).toString('utf8')).toBe('first')
+  expect(readBlobFile(second).toString('utf8')).toBe('second')
+  expect(second).toBe(join(root, 'audio_system', '2025', '01', '02', 'b.wav'))
+})
+
+test('path() matches write() layout for the same inputs', async () => {
+  const root = freshRoot()
+  const store = makeBlobStore(root)
+  const at = Date.UTC(2025, 10, 11)
+  const expected = store.path('screenshot', 'same-layout', 'png', at)
+
+  const written = await store.write('screenshot', 'same-layout', 'png', Buffer.from('x'), at)
+
+  expect(written).toBe(expected)
+})
+
+test('write() propagates mkdir errors other than EEXIST', async () => {
+  const root = freshRoot()
+  const blocker = join(root, 'not-a-directory')
+  writeFileSync(blocker, 'x')
+  const store = makeBlobStore(blocker)
+
+  await expect(store.write('screenshot', 'blocked', 'png', Buffer.from('x'))).rejects.toThrow()
 })
