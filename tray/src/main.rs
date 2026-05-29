@@ -38,6 +38,8 @@ const APP_NAME: &str = "Hyprmnesia";
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const STARTUP_NAME: &str = "Hyprmnesia Tray";
 const REFRESH_EVERY: Duration = Duration::from_secs(2);
+const TRAY_RUNNING_ICON: &[u8] = include_bytes!("../assets/tray-running.png");
+const TRAY_STOPPED_ICON: &[u8] = include_bytes!("../assets/tray-stopped.png");
 
 #[derive(Debug, Clone, Deserialize)]
 struct DaemonStatus {
@@ -612,28 +614,15 @@ fn executable_name(base: &str) -> String {
 }
 
 fn make_icon(state: TrayState) -> Icon {
-    let size = 32;
-    let mut rgba = Vec::with_capacity(size * size * 4);
-    let primary: [u8; 4] = match state {
-        TrayState::Running => [91, 213, 255, 255],
-        TrayState::Stopped => [140, 140, 140, 255],
+    let bytes = match state {
+        TrayState::Running => TRAY_RUNNING_ICON,
+        TrayState::Stopped => TRAY_STOPPED_ICON,
     };
-    for y in 0..size {
-        for x in 0..size {
-            let mut color = [18, 20, 24, 255];
-            let in_left = (8..=11).contains(&x) && (7..=24).contains(&y);
-            let in_right = (20..=23).contains(&x) && (7..=24).contains(&y);
-            let in_bridge = (8..=23).contains(&x) && (14..=17).contains(&y);
-            let in_border = x == 2 || x == 29 || y == 2 || y == 29;
-            if in_left || in_right || in_bridge {
-                color = primary;
-            } else if in_border {
-                color = [78, 92, 112, 255];
-            }
-            rgba.extend_from_slice(&color);
-        }
-    }
-    Icon::from_rgba(rgba, size as u32, size as u32).expect("valid tray icon")
+    let image = image::load_from_memory(bytes)
+        .expect("embedded tray icon png")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    Icon::from_rgba(image.into_raw(), width, height).expect("valid tray icon")
 }
 
 fn home_dir() -> Option<PathBuf> {

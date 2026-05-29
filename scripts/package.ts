@@ -18,6 +18,7 @@ const ROOT = join(import.meta.dir, '..')
 const DIST = join(ROOT, 'dist')
 const ARTIFACTS = join(ROOT, 'artifacts')
 const STAGING = join(ARTIFACTS, 'staging')
+const APP_ICON = join(ROOT, 'assets', 'brand', 'hyprmnesia.ico')
 const UPGRADE_CODE = '{8F994E2E-33FB-4B7F-AE2B-B98F75C4815D}'
 
 function packageVersion(): string {
@@ -63,6 +64,9 @@ function ensureDist(): void {
   }
   if (!existsSync(join(DIST, 'native'))) {
     throw new Error('missing dist/native; run bun run build before packaging')
+  }
+  if (process.platform === 'win32' && !existsSync(APP_ICON)) {
+    throw new Error(`missing app icon: ${APP_ICON}`)
   }
 }
 
@@ -197,10 +201,11 @@ function windowsInstallerSource(appDir: string, version: string): string {
 ${components}
     </ComponentGroup>
     <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="*">
-      <Shortcut Id="HyprmnesiaShortcut" Name="Hyprmnesia" Target="[INSTALLFOLDER]hpm.exe" WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="HyprmnesiaShortcut" Name="Hyprmnesia" Target="[INSTALLFOLDER]hpm.exe" WorkingDirectory="INSTALLFOLDER" Icon="HyprmnesiaIcon" />
       <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
       <RegistryValue Root="HKCU" Key="Software\\Hyprmnesia" Name="startMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
+    <Icon Id="HyprmnesiaIcon" SourceFile="${xml(APP_ICON)}" />
     <Component Id="PathEnvironment" Directory="INSTALLFOLDER" Guid="*">
       <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]" Permanent="no" Part="last" Action="set" System="no" />
       <RegistryValue Root="HKCU" Key="Software\\Hyprmnesia" Name="pathEnvironment" Type="integer" Value="1" KeyPath="yes" />

@@ -48,12 +48,15 @@ import ffmpegStaticPath from 'ffmpeg-static'
 import { ensureSqliteCipher } from './scripts/build-sqlcipher'
 
 const STUBS = new Set(['react-devtools-core', 'mock-aws-s3', 'aws-sdk', 'nock'])
+const APP_NAME = 'Hyprmnesia'
+const WINDOWS_APP_DESCRIPTION = 'Local-first screen and audio memory for desktop assistants'
 const COMPAT_THROTTLE = resolve('./node_modules/es-toolkit/dist/compat/function/throttle.mjs')
 const ANSI_ESCAPES_BASE = './node_modules/ansi-escapes/base.js'
 const GET_WINDOWS_NATIVE_SRC = resolve(
   './node_modules/get-windows/lib/binding/napi-9-win32-unknown-x64/node-get-windows.node',
 )
 const GET_WINDOWS_NATIVE_DEST = resolve('./dist/native/node-get-windows.node')
+const WINDOWS_APP_ICON = resolve('./assets/brand/hyprmnesia.ico')
 const FFMPEG_STATIC_SRC =
   typeof ffmpegStaticPath === 'string' ? resolve(ffmpegStaticPath) : undefined
 const EXE = process.platform === 'win32' ? '.exe' : ''
@@ -113,7 +116,12 @@ if (!bundle.success) {
   process.exit(1)
 }
 
-await $`bun build --compile ./dist/bundle.mjs --outfile ./dist/hpm`
+if (process.platform === 'win32') {
+  if (!existsSync(WINDOWS_APP_ICON)) throw new Error(`missing app icon: ${WINDOWS_APP_ICON}`)
+  await $`bun build --compile ./dist/bundle.mjs --outfile ./dist/hpm --windows-icon=${WINDOWS_APP_ICON} --windows-title=${APP_NAME} --windows-publisher=${APP_NAME} --windows-description=${WINDOWS_APP_DESCRIPTION}`
+} else {
+  await $`bun build --compile ./dist/bundle.mjs --outfile ./dist/hpm`
+}
 
 if (process.platform === 'win32' && existsSync(GET_WINDOWS_NATIVE_SRC)) {
   await mkdir(dirname(GET_WINDOWS_NATIVE_DEST), { recursive: true })

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/hyprmnesia-mark-128.png" alt="Hyprmnesia logo" width="96" height="96">
+</p>
+
 # hyprmnesia
 
 [![CI](https://github.com/hyprmnesia/hyprmnesia/actions/workflows/ci.yml/badge.svg)](https://github.com/hyprmnesia/hyprmnesia/actions/workflows/ci.yml)
