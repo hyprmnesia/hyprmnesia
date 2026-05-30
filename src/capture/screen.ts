@@ -15,6 +15,9 @@ interface FrameBus {
   onFrame(handler: (frame: SckFrameEvent) => void): () => void
 }
 
+type StoredImageExt = 'png' | 'jpg' | 'webp'
+type CaptureImageFormat = 'png' | 'jpg'
+
 export interface ScreenCaptureDeps {
   cfg: ScreenCaptureConfig
   blobs: BlobStore
@@ -28,6 +31,35 @@ export interface ScreenCaptureDeps {
 export interface CaptureRunner {
   stop: () => void
   done: Promise<void>
+}
+
+function captureImageFormat(format: ScreenCaptureConfig['format']): CaptureImageFormat {
+  return format === 'webp' ? 'png' : format
+}
+
+function frameExt(format: SckFrameEvent['format']): CaptureImageFormat {
+  return format === 'jpeg' ? 'jpg' : 'png'
+}
+
+function webpMagic(buf: Buffer): boolean {
+  return (
+    buf.length >= 12 &&
+    buf.toString('ascii', 0, 4) === 'RIFF' &&
+    buf.toString('ascii', 8, 12) === 'WEBP'
+  )
+}
+
+async function prepareImageForStorage(
+  raw: Buffer,
+  fallbackExt: CaptureImageFormat,
+  opts: { format: ScreenCaptureConfig['format']; quality: number; maxWidth: number },
+): Promise<{ image: Buffer; ext: StoredImageExt }> {
+  if (!needsImageTranscode(opts)) return { image: raw, ext: fallbackExt }
+  const image = await transcodeImage(raw, opts)
+  if (opts.format === 'webp') {
+    return { image, ext: webpMagic(image) ? 'webp' : fallbackExt }
+  }
+  return { image, ext: opts.format }
 }
 
 // Backend selection: macOS uses the ScreenCaptureKit helper (hpm-sck); Wayland
@@ -58,10 +90,12 @@ export function startScreenCapture({
   }
 
   if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) {
+    const imageFormat = captureImageFormat(cfg.format)
     const wlcap = createWlcapBus(
       {
         frameIntervalMs: cfg.interval_ms,
-        imageFormat: cfg.format,
+        imageFormat,
+        jpegQuality: cfg.quality,
       },
       events,
     )
@@ -86,16 +120,16 @@ export function startScreenCapture({
   }
 
   const qualityOpts = { format: cfg.format, quality: cfg.quality, maxWidth: cfg.max_width }
-  const transcode = needsImageTranscode(qualityOpts)
+  const imageFormat = captureImageFormat(cfg.format)
 
   async function tick() {
     const start = Date.now()
     try {
-      const raw = (await screenshot({ format: cfg.format })) as Buffer
-      const buf = transcode ? await transcodeImage(raw, qualityOpts) : raw
+      const raw = (await screenshot({ format: imageFormat })) as Buffer
+      const text = await ocr.process(raw)
+      const { image, ext } = await prepareImageForStorage(raw, imageFormat, qualityOpts)
       const id = randomUUIDv7()
-      const path = await blobs.write('screenshot', id, cfg.format, buf)
-      const text = await ocr.process(buf)
+      const path = await blobs.write('screenshot', id, ext, image)
       const at = Date.now()
       const window = getWindow?.()
       store.insert({
@@ -103,7 +137,7 @@ export function startScreenCapture({
         kind: 'screenshot',
         at,
         blob: path,
-        bytes: buf.length,
+        bytes: image.length,
         text,
         capture_ms: at - start,
         window,
@@ -115,7 +149,7 @@ export function startScreenCapture({
         at,
         id,
         path,
-        bytes: buf.length,
+        bytes: image.length,
         text_len: text.length,
         capture_ms: at - start,
         window,
@@ -159,18 +193,23 @@ function startWorkerScreen(
 
   async function processFrame(frame: SckFrameEvent) {
     const start = Date.now()
-    const ext = frame.format === 'jpeg' ? 'jpg' : 'png'
+    const fallbackExt = frameExt(frame.format)
     try {
-      const id = randomUUIDv7()
-      const path = await blobs.write('screenshot', id, ext, frame.image, frame.at)
       const text = await ocr.process(frame.image)
+      const { image, ext } = await prepareImageForStorage(frame.image, fallbackExt, {
+        format: cfg.format,
+        quality: cfg.quality,
+        maxWidth: cfg.max_width,
+      })
+      const id = randomUUIDv7()
+      const path = await blobs.write('screenshot', id, ext, image, frame.at)
       const window = getWindow?.()
       store.insert({
         id,
         kind: 'screenshot',
         at: frame.at,
         blob: path,
-        bytes: frame.image.length,
+        bytes: image.length,
         text,
         capture_ms: Date.now() - start,
         window,
@@ -182,7 +221,7 @@ function startWorkerScreen(
         at: frame.at,
         id,
         path,
-        bytes: frame.image.length,
+        bytes: image.length,
         text_len: text.length,
         capture_ms: Date.now() - start,
         window,

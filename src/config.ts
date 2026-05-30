@@ -7,14 +7,15 @@ export interface ScreenCaptureConfig {
   enabled: boolean
   interval_ms: number
   monitor: 'primary' | 'all' | number
-  format: 'png' | 'jpg'
-  // JPEG quality (1-100). Ignored when format is png.
+  format: 'png' | 'jpg' | 'webp'
+  // Lossy quality (1-100). Used by JPEG and WebP; ignored when format is png.
   quality: number
   // Downscale captures to fit this width in pixels; 0 keeps native resolution.
   max_width: number
 }
 
 type SystemAudioBackend = 'auto' | 'wasapi' | 'dshow'
+type AudioStorageFormat = 'webm' | 'wav'
 
 export interface AudioStreamConfig {
   enabled: boolean
@@ -29,6 +30,10 @@ export interface AudioStreamConfig {
 
 export interface AudioCaptureConfig {
   sample_rate: number
+  // Stored audio blob format. The ASR pipeline still receives raw PCM.
+  format: AudioStorageFormat
+  // Opus bitrate in kbps when format is webm. Ignored for wav.
+  bitrate_kbps: number
   echo_suppression: {
     enabled: boolean
     system_threshold_db: number
@@ -84,12 +89,14 @@ const defaultConfig: Config = {
       enabled: true,
       interval_ms: 5000,
       monitor: 'primary',
-      format: 'png',
+      format: 'webp',
       quality: 80,
       max_width: 0,
     },
     audio: {
       sample_rate: 16000,
+      format: 'webm',
+      bitrate_kbps: 24,
       echo_suppression: {
         enabled: true,
         system_threshold_db: -45,
@@ -202,11 +209,18 @@ function migrateLegacyEncryption(parsed: DeepPartial<Config>): void {
 
 function normalizeConfig(config: Config): Config {
   const screen = config.capture.screen
-  if (screen.format !== 'png' && screen.format !== 'jpg') screen.format = 'png'
+  if (screen.format !== 'png' && screen.format !== 'jpg' && screen.format !== 'webp')
+    screen.format = 'webp'
   if (!Number.isFinite(screen.quality)) screen.quality = defaultConfig.capture.screen.quality
   screen.quality = Math.max(1, Math.min(100, Math.trunc(screen.quality)))
   if (!Number.isFinite(screen.max_width) || screen.max_width < 0) screen.max_width = 0
   screen.max_width = Math.trunc(screen.max_width)
+
+  const audio = config.capture.audio
+  if (audio.format !== 'webm' && audio.format !== 'wav') audio.format = 'webm'
+  if (!Number.isFinite(audio.bitrate_kbps))
+    audio.bitrate_kbps = defaultConfig.capture.audio.bitrate_kbps
+  audio.bitrate_kbps = Math.max(6, Math.min(256, Math.trunc(audio.bitrate_kbps)))
 
   const tx = config.processing.transcription
   if (LEGACY_TRANSCRIPTION_ENGINES.has(tx.engine)) tx.engine = 'parakeet'

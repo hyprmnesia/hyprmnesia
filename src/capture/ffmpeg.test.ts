@@ -9,7 +9,13 @@
 
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { ffmpegSearchPaths, getFfmpegPath, needsImageTranscode, transcodeImage } from './ffmpeg'
+import {
+  encodePcm16WebmOpus,
+  ffmpegSearchPaths,
+  getFfmpegPath,
+  needsImageTranscode,
+  transcodeImage,
+} from './ffmpeg'
 
 // ---- ffmpegSearchPaths: pure path-resolution priority --------------------
 
@@ -52,6 +58,10 @@ test('needsImageTranscode: png at native resolution is a pass-through', () => {
 
 test('needsImageTranscode: any jpg output requires transcoding', () => {
   expect(needsImageTranscode({ format: 'jpg', quality: 80, maxWidth: 0 })).toBe(true)
+})
+
+test('needsImageTranscode: webp output requires transcoding', () => {
+  expect(needsImageTranscode({ format: 'webp', quality: 80, maxWidth: 0 })).toBe(true)
 })
 
 test('needsImageTranscode: maxWidth > 0 forces transcoding even for png', () => {
@@ -125,6 +135,17 @@ async function probeDimensions(image: Buffer): Promise<{ width: number; height: 
   return { width: Number(match[1]), height: Number(match[2]) }
 }
 
+async function ffmpegHasEncoder(name: string): Promise<boolean> {
+  const proc = Bun.spawn([getFfmpegPath(), '-hide_banner', '-encoders'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    windowsHide: true,
+  })
+  const text = await new Response(proc.stdout).text()
+  await proc.exited
+  return text.includes(name)
+}
+
 function pngMagic(buf: Buffer): boolean {
   // 89 50 4E 47 0D 0A 1A 0A
   return (
@@ -149,6 +170,18 @@ function jpegMagic(buf: Buffer): boolean {
     buf[buf.length - 2] === 0xff &&
     buf[buf.length - 1] === 0xd9
   )
+}
+
+function webpMagic(buf: Buffer): boolean {
+  return (
+    buf.length >= 12 &&
+    buf.toString('ascii', 0, 4) === 'RIFF' &&
+    buf.toString('ascii', 8, 12) === 'WEBP'
+  )
+}
+
+function webmMagic(buf: Buffer): boolean {
+  return buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3
 }
 
 describe.if(ffmpegAvailable)('transcodeImage (with ffmpeg)', () => {
@@ -185,6 +218,14 @@ describe.if(ffmpegAvailable)('transcodeImage (with ffmpeg)', () => {
     expect(lowQ.length).toBeLessThanOrEqual(highQ.length)
   })
 
+  test('png to lossy webp conversion produces a WebP image', async () => {
+    if (!(await ffmpegHasEncoder('libwebp'))) return
+    const out = await transcodeImage(pngWide, { format: 'webp', quality: 75, maxWidth: 0 })
+    expect(webpMagic(out)).toBe(true)
+    const dim = await probeDimensions(out)
+    expect(dim).toEqual({ width: 200, height: 100 })
+  })
+
   test('maxWidth clamps wider input proportionally', async () => {
     const out = await transcodeImage(pngWide, { format: 'png', quality: 100, maxWidth: 100 })
     expect(pngMagic(out)).toBe(true)
@@ -214,5 +255,14 @@ describe.if(ffmpegAvailable)('transcodeImage (with ffmpeg)', () => {
     const empty = Buffer.alloc(0)
     const out = await transcodeImage(empty, { format: 'jpg', quality: 80, maxWidth: 0 })
     expect(out).toBe(empty)
+  })
+
+  test('encodePcm16WebmOpus writes a compact WebM/Opus blob', async () => {
+    if (!(await ffmpegHasEncoder('libopus'))) return
+    const pcm = Buffer.alloc(16_000)
+    const out = await encodePcm16WebmOpus(pcm, 16_000, { bitrateKbps: 24 })
+    expect(webmMagic(out)).toBe(true)
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.length).toBeLessThan(pcm.length)
   })
 })

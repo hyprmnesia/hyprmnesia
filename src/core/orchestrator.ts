@@ -165,12 +165,13 @@ export function makeOrchestrator(cfg: Config): Orchestrator {
     const wantSckScreen = process.platform === 'darwin' && cfg.capture.screen.enabled
     const wantSckSystemAudio = process.platform === 'darwin' && cfg.capture.audio.system.enabled
     if (wantSckScreen || wantSckSystemAudio) {
+      const imageFormat = cfg.capture.screen.format === 'webp' ? 'png' : cfg.capture.screen.format
       sck = createSckBus(
         {
           sampleRate: cfg.capture.audio.sample_rate,
           channelCount: 2,
           frameIntervalMs: cfg.capture.screen.interval_ms,
-          imageFormat: cfg.capture.screen.format,
+          imageFormat,
           jpegQuality: cfg.capture.screen.quality,
           captureAudio: wantSckSystemAudio,
           captureVideo: wantSckScreen,

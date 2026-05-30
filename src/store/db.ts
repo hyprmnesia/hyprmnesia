@@ -66,6 +66,7 @@ export interface ChunkStore {
   finalizeAudioChunk(
     id: string,
     fields: {
+      blob?: string
       bytes: number
       capture_ms: number
       end_at: number
@@ -307,7 +308,8 @@ export function openChunkStore(
   `)
   const finalizeAudioChunkStmt = db.prepare(`
     UPDATE chunks
-    SET bytes = $bytes,
+    SET blob = COALESCE($blob, blob),
+        bytes = $bytes,
         capture_ms = $capture_ms,
         end_at = $end_at,
         audio_rms_db = $audio_rms_db,
@@ -393,6 +395,7 @@ export function openChunkStore(
     finalizeAudioChunk(id, fields) {
       finalizeAudioChunkStmt.run({
         $id: id,
+        $blob: fields.blob ?? null,
         $bytes: fields.bytes,
         $capture_ms: fields.capture_ms,
         $end_at: fields.end_at,

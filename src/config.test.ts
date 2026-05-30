@@ -80,3 +80,21 @@ test('malformed encryption flags fall back to defaults (on)', () => {
   expect(cfg.storage.encryption.database).toBe(true)
   expect(cfg.storage.encryption.blobs).toBe(true)
 })
+
+test('lossy blob formats default to webp screenshots and webm audio', () => {
+  const cfg = loadConfig(tmpConfig('{}'))
+  expect(cfg.capture.screen.format).toBe('webp')
+  expect(cfg.capture.audio.format).toBe('webm')
+  expect(cfg.capture.audio.bitrate_kbps).toBe(24)
+})
+
+test('invalid blob formats fall back to lossy defaults and clamp bitrate', () => {
+  const cfg = loadConfig(
+    tmpConfig(
+      '{"capture":{"screen":{"format":"gif"},"audio":{"format":"mp3","bitrate_kbps":999}}}',
+    ),
+  )
+  expect(cfg.capture.screen.format).toBe('webp')
+  expect(cfg.capture.audio.format).toBe('webm')
+  expect(cfg.capture.audio.bitrate_kbps).toBe(256)
+})
