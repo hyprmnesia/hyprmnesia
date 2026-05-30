@@ -1,5 +1,24 @@
 # hyprmnesia
 
+## 0.5.0
+
+### Minor Changes
+
+- [#70](https://github.com/hyprmnesia/hyprmnesia/pull/70) [`928fbbb`](https://github.com/hyprmnesia/hyprmnesia/commit/928fbbba0c745e5ffa1fd0302bb9c0ef486375ec) Thanks [@julpel8](https://github.com/julpel8)! - Store new capture blobs in lossy formats by default: screenshots use WebP and audio chunks use WebM/Opus, with WAV/PNG/JPEG remaining available for compatibility.
+
+- [#71](https://github.com/hyprmnesia/hyprmnesia/pull/71) [`949796a`](https://github.com/hyprmnesia/hyprmnesia/commit/949796aea9d771d40e39e1cfdb40fc2d0cbfa19d) Thanks [@julpel8](https://github.com/julpel8)! - Add update notifications via GitHub Releases.
+
+  - **`hpm update [--check] [--json]`**: checks GitHub for a newer release and
+    reports it. Notification-only — it never downloads or installs anything.
+    `--json` prints the machine-readable status.
+  - **Automatic notice on `hpm start`**: after the daemon is spawned, a one-line
+    notice is shown when a newer release exists. It reads from a daily cache
+    (`~/.hyprmnesia/update-check.json`) with ETag-based conditional requests, runs
+    with a short timeout, and never blocks capture or fails startup.
+  - **Opt-out**: the automatic check is skipped under `HPM_NO_UPDATE_CHECK=1`,
+    `CI=1`, or `update.check: false` in `config.yaml`. `hpm update` always checks
+    on demand regardless.
+
 ## 0.4.1
 
 ### Patch Changes
