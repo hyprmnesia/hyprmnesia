@@ -38,8 +38,14 @@ const APP_NAME: &str = "Hyprmnesia";
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const STARTUP_NAME: &str = "Hyprmnesia Tray";
 const REFRESH_EVERY: Duration = Duration::from_secs(2);
+#[cfg(target_os = "windows")]
 const TRAY_RUNNING_ICON: &[u8] = include_bytes!("../assets/tray-running.png");
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const TRAY_RUNNING_ICON: &[u8] = include_bytes!("../assets/tray-running-unix.png");
+#[cfg(target_os = "windows")]
 const TRAY_STOPPED_ICON: &[u8] = include_bytes!("../assets/tray-stopped.png");
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const TRAY_STOPPED_ICON: &[u8] = include_bytes!("../assets/tray-stopped-unix.png");
 
 #[derive(Debug, Clone, Deserialize)]
 struct DaemonStatus {
