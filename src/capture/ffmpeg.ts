@@ -99,7 +99,7 @@ export function getFfmpegPath(): string {
 }
 
 export interface ImageQualityOptions {
-  format: 'png' | 'jpg'
+  format: 'png' | 'jpg' | 'webp'
   quality: number
   maxWidth: number
 }
@@ -110,14 +110,14 @@ export interface ImageQualityOptions {
  * captures never pay the transcode cost.
  */
 export function needsImageTranscode(opts: ImageQualityOptions): boolean {
-  return opts.maxWidth > 0 || opts.format === 'jpg'
+  return opts.maxWidth > 0 || opts.format === 'jpg' || opts.format === 'webp'
 }
 
 /**
- * Re-encodes a screenshot through ffmpeg to apply resolution and JPEG quality.
+ * Re-encodes a screenshot through ffmpeg to apply resolution and lossy quality.
  *
  * Used on the screenshot-desktop capture path (Windows/Linux), which cannot
- * downscale or set JPEG quality on its own. On any failure the original buffer
+ * downscale or set image quality on its own. On any failure the original buffer
  * is returned so capture keeps working even when ffmpeg is unavailable.
  */
 export async function transcodeImage(input: Buffer, opts: ImageQualityOptions): Promise<Buffer> {
@@ -131,6 +131,9 @@ export async function transcodeImage(input: Buffer, opts: ImageQualityOptions): 
     // mjpeg uses qscale 2 (best) to 31 (worst); map 1-100 onto that range.
     const qscale = Math.round(2 + ((100 - quality) / 99) * 29)
     args.push('-q:v', String(qscale), '-f', 'mjpeg')
+  } else if (opts.format === 'webp') {
+    const quality = Math.max(1, Math.min(100, Math.trunc(opts.quality)))
+    args.push('-c:v', 'libwebp', '-lossless', '0', '-q:v', String(quality), '-f', 'webp')
   } else {
     args.push('-c:v', 'png', '-f', 'image2pipe')
   }
@@ -150,6 +153,64 @@ export async function transcodeImage(input: Buffer, opts: ImageQualityOptions): 
   } catch {
     return input
   }
+}
+
+export interface AudioOpusOptions {
+  bitrateKbps: number
+}
+
+/**
+ * Encodes mono signed 16-bit PCM into a WebM/Opus blob for compact replay
+ * storage. The capture/ASR path keeps using PCM; this is only for the durable
+ * blob written after a chunk is complete.
+ */
+export async function encodePcm16WebmOpus(
+  pcm: Buffer,
+  sampleRate: number,
+  opts: AudioOpusOptions,
+): Promise<Buffer> {
+  const bitrateKbps = Math.max(6, Math.min(256, Math.trunc(opts.bitrateKbps)))
+  const proc = Bun.spawn(
+    [
+      getFfmpegPath(),
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      's16le',
+      '-acodec',
+      'pcm_s16le',
+      '-ar',
+      String(sampleRate),
+      '-ac',
+      '1',
+      '-i',
+      'pipe:0',
+      '-vn',
+      '-c:a',
+      'libopus',
+      '-application',
+      'voip',
+      '-b:a',
+      `${bitrateKbps}k`,
+      '-vbr',
+      'on',
+      '-f',
+      'webm',
+      'pipe:1',
+    ],
+    { stdin: pcm, stdout: 'pipe', stderr: 'pipe', windowsHide: true },
+  )
+  const [out, stderr, exit] = await Promise.all([
+    new Response(proc.stdout).arrayBuffer(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  const encoded = Buffer.from(out)
+  if (exit !== 0 || encoded.length === 0) {
+    throw new Error(`ffmpeg opus encode failed${stderr.trim() ? `: ${stderr.trim()}` : ''}`)
+  }
+  return encoded
 }
 
 export async function listDshowAudioDevices(): Promise<string[]> {

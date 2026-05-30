@@ -64,7 +64,7 @@ export function settingsFields(config: Config): SettingField[] {
       label: 'Screen format',
       path: ['capture', 'screen', 'format'],
       kind: 'enum',
-      choices: ['png', 'jpg'],
+      choices: ['webp', 'jpg', 'png'],
       hint: 'image format',
     },
     {
@@ -74,7 +74,7 @@ export function settingsFields(config: Config): SettingField[] {
       step: 5,
       min: 1,
       max: 100,
-      hint: 'JPEG quality (jpg only)',
+      hint: 'lossy quality (webp/jpg)',
     },
     {
       label: 'Screen max width',
@@ -137,6 +137,22 @@ export function settingsFields(config: Config): SettingField[] {
       kind: 'enum',
       choices: [16000, 24000, 44100, 48000],
       hint: 'Hz',
+    },
+    {
+      label: 'Audio format',
+      path: ['capture', 'audio', 'format'],
+      kind: 'enum',
+      choices: ['webm', 'wav'],
+      hint: 'blob storage format',
+    },
+    {
+      label: 'Opus bitrate',
+      path: ['capture', 'audio', 'bitrate_kbps'],
+      kind: 'number',
+      step: 4,
+      min: 6,
+      max: 256,
+      hint: 'kbps, webm only',
     },
     {
       label: 'Echo guard',

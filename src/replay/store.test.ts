@@ -136,7 +136,7 @@ test('load() groups replay rows, clips offsets, and filters out-of-window segmen
     id: 'screen-mid',
     kind: 'screenshot',
     at: T + 2_000,
-    blob: blob('screen-mid.jpg'),
+    blob: blob('screen-mid.webp'),
     bytes: 12,
     text: 'middle screen',
     capture_ms: 2,
@@ -156,7 +156,7 @@ test('load() groups replay rows, clips offsets, and filters out-of-window segmen
     at: T + 500,
     start_at: T + 500,
     end_at: T + 2_500,
-    blob: blob('mic.wav'),
+    blob: blob('mic.webm'),
     bytes: 20,
     text: '',
     capture_ms: 3,
@@ -274,14 +274,14 @@ test('load() groups replay rows, clips offsets, and filters out-of-window segmen
 
     const screenshot = manifest.screenshots[1]!
     expect(screenshot.offset_start_ms).toBe(1_000)
-    expect(screenshot.mime_type).toBe('image/jpeg')
+    expect(screenshot.mime_type).toBe('image/webp')
 
     const mic = manifest.audio.mic[0]!
     expect(mic.offset_start_ms).toBe(0)
     expect(mic.offset_end_ms).toBe(1_500)
     expect(mic.blob_start_offset_ms).toBe(500)
     expect(mic.duration_ms).toBe(2_000)
-    expect(mic.mime_type).toBe('audio/wav')
+    expect(mic.mime_type).toBe('audio/webm; codecs=opus')
     expect(mic.has_blob).toBe(true)
     expect(mic.audio).toEqual({
       rms_db: -25,

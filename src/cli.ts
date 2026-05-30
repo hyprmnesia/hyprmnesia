@@ -99,8 +99,18 @@ function applyFlags(cfg: Config, flags: Record<string, string | boolean>) {
   /** Extracts string-valued flags while ignoring boolean switches. */
   const s = (v: unknown) => (typeof v === 'string' ? v : undefined)
   if (flags['screen-interval']) cfg.capture.screen.interval_ms = n(flags['screen-interval'])
+  if (flags['screen-format']) {
+    const format = s(flags['screen-format'])
+    if (format === 'png' || format === 'jpg' || format === 'webp')
+      cfg.capture.screen.format = format
+  }
   if (flags['screen-quality']) cfg.capture.screen.quality = n(flags['screen-quality'])
   if (flags['screen-max-width']) cfg.capture.screen.max_width = n(flags['screen-max-width'])
+  if (flags['audio-format']) {
+    const format = s(flags['audio-format'])
+    if (format === 'webm' || format === 'wav') cfg.capture.audio.format = format
+  }
+  if (flags['audio-bitrate']) cfg.capture.audio.bitrate_kbps = n(flags['audio-bitrate'])
   if (flags['audio-chunk']) {
     const ms = n(flags['audio-chunk'])
     cfg.capture.audio.mic.chunk_ms = ms
@@ -156,8 +166,11 @@ usage:
 flags (for hpm/start):
   --config <path>        config file (default: ~/.hyprmnesia/config.yaml)
   --screen-interval <ms> override screen capture interval
-  --screen-quality <n>   JPEG quality 1-100 (jpg format only)
+  --screen-format <fmt>  image format: webp, jpg, or png
+  --screen-quality <n>   lossy quality 1-100 (webp/jpg only)
   --screen-max-width <n> downscale captures to fit width in px (0 = native)
+  --audio-format <fmt>   audio blob format: webm or wav
+  --audio-bitrate <n>    Opus bitrate kbps (webm only)
   --audio-chunk <ms>     override chunk duration for both mic and system
   --mic-device <name>    override mic device (default: auto)
   --system-device <name> override system audio device (default: default)

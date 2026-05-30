@@ -168,19 +168,23 @@ test('numericRange: single value → min === max', () => {
 
 // ---- mimeForKind ----------------------------------------------------------
 
-test('mimeForKind: screenshot picks png by default and jpeg for .jpg/.jpeg', () => {
+test('mimeForKind: screenshot picks png by default, jpeg for .jpg/.jpeg, and webp for .webp', () => {
   expect(mimeForKind('screenshot', '/blobs/a.png')).toBe('image/png')
   expect(mimeForKind('screenshot', '/blobs/a.jpg')).toBe('image/jpeg')
   expect(mimeForKind('screenshot', '/blobs/a.jpeg')).toBe('image/jpeg')
+  expect(mimeForKind('screenshot', '/blobs/a.webp')).toBe('image/webp')
   // Case-insensitive
   expect(mimeForKind('screenshot', '/blobs/A.JPG')).toBe('image/jpeg')
   expect(mimeForKind('screenshot', '/blobs/A.JPEG')).toBe('image/jpeg')
+  expect(mimeForKind('screenshot', '/blobs/A.WEBP')).toBe('image/webp')
 })
 
-test('mimeForKind: audio kinds always return audio/wav', () => {
+test('mimeForKind: audio kinds pick wav by default and webm/opus for .webm', () => {
   expect(mimeForKind('audio_mic', '/blobs/x.wav')).toBe('audio/wav')
   expect(mimeForKind('audio_system', '/blobs/x.wav')).toBe('audio/wav')
-  // Extension is ignored for audio.
+  expect(mimeForKind('audio_mic', '/blobs/x.webm')).toBe('audio/webm; codecs=opus')
+  expect(mimeForKind('audio_system', '/blobs/X.WEBM')).toBe('audio/webm; codecs=opus')
+  // Unknown audio extensions fall back to wav for legacy compatibility.
   expect(mimeForKind('audio_mic', '/blobs/x.mp3')).toBe('audio/wav')
 })
 

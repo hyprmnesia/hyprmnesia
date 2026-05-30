@@ -8,6 +8,7 @@ import {
   buildMicInputArgs,
   buildSystemAudioInputArgs,
   buildWasapiArgs,
+  encodePcm16WebmOpus,
   findWasapiBinary,
   getFfmpegPath,
   listAvfoundationAudioDevices,
@@ -38,6 +39,8 @@ interface AudioStreamDeps {
   transcription: TranscriptionQueue
   events: EventBus
   echo: EchoSuppressionRuntime
+  storageFormat: AudioBlobExt
+  storageBitrateKbps: number
   getWindow?: () => WindowContext | undefined
 }
 
@@ -46,6 +49,7 @@ const SCR_INSTALL_URL =
 const LEVEL_THROTTLE_MS = 100
 const ASR_FRAME_MS = 30
 const BYTES_PER_SAMPLE = 2
+type AudioBlobExt = 'wav' | 'webm'
 
 const NOOP_RUNNER: CaptureRunner = { stop: () => {}, done: Promise.resolve() }
 
@@ -254,6 +258,8 @@ function makeAudioConsumer(
     device,
     sampleRate,
     chunkMs,
+    storageFormat,
+    storageBitrateKbps,
     blobs,
     store,
     transcription,
@@ -272,12 +278,29 @@ function makeAudioConsumer(
   let asrPending = Buffer.alloc(0)
   let asrPendingAt: number | undefined
   let lastLevelAt = 0
+  let warnedOpusFallback = false
+  let opusUnavailable = false
+
+  const encodeStoredAudio = async (
+    pcm: Buffer,
+  ): Promise<{ data: Buffer; ext: AudioBlobExt; fallback?: string }> => {
+    if (storageFormat === 'webm' && !opusUnavailable) {
+      try {
+        const data = await encodePcm16WebmOpus(pcm, sampleRate, { bitrateKbps: storageBitrateKbps })
+        return { data, ext: 'webm' }
+      } catch (err) {
+        opusUnavailable = true
+        return { data: encodePcm16Wav(pcm, sampleRate), ext: 'wav', fallback: String(err) }
+      }
+    }
+    return { data: encodePcm16Wav(pcm, sampleRate), ext: 'wav' }
+  }
 
   const ensureChunk = (at: number): AudioChunkState => {
     if (current) return current
     const id = randomUUIDv7()
     const kind = chunkKind(source)
-    const blobPath = blobs.path(kind, id, 'wav', at)
+    const blobPath = blobs.path(kind, id, storageFormat, at)
     const window = getWindow?.()
     current = { id, kind, startAt: at, blobPath, window, parts: [], samples: 0, inserted: false }
     return current
@@ -324,14 +347,31 @@ function makeAudioConsumer(
     const chunk = current
     current = undefined
     const pcm = Buffer.concat(chunk.parts)
-    const wav = encodePcm16Wav(pcm, sampleRate)
-    await blobs.write(chunk.kind, chunk.id, 'wav', wav, chunk.startAt)
+    const encoded = await encodeStoredAudio(pcm)
+    if (encoded.fallback && !warnedOpusFallback) {
+      warnedOpusFallback = true
+      events.publish({
+        type: 'log',
+        at: Date.now(),
+        level: 'warn',
+        message: `audio opus encode failed; storing ${source} chunks as wav: ${encoded.fallback}`,
+      })
+    }
+    const blobPath = await blobs.write(
+      chunk.kind,
+      chunk.id,
+      encoded.ext,
+      encoded.data,
+      chunk.startAt,
+    )
+    chunk.blobPath = blobPath
     const endAt = chunk.startAt + Math.round((chunk.samples / sampleRate) * 1000)
     const levels = pcm16Levels(pcm)
     const rms_db = finiteLevel(levels.rms_db)
     const peak_db = finiteLevel(levels.peak_db)
     store.finalizeAudioChunk(chunk.id, {
-      bytes: wav.length,
+      blob: blobPath,
+      bytes: encoded.data.length,
       capture_ms: Date.now() - chunk.startAt,
       end_at: endAt,
       rms_db,
@@ -342,8 +382,8 @@ function makeAudioConsumer(
       source,
       at: endAt,
       id: chunk.id,
-      path: chunk.blobPath,
-      bytes: wav.length,
+      path: blobPath,
+      bytes: encoded.data.length,
       text_len: 0,
       capture_ms: Date.now() - chunk.startAt,
       window: chunk.window,
@@ -478,7 +518,14 @@ function startSckSystemStream(
       type: 'started',
       source,
       at: Date.now(),
-      meta: { mode: 'pcm', chunk_ms: stream.chunk_ms, device: 'sck', sample_rate: sampleRate },
+      meta: {
+        mode: 'pcm',
+        chunk_ms: stream.chunk_ms,
+        device: 'sck',
+        sample_rate: sampleRate,
+        storage_format: deps.storageFormat,
+        storage_bitrate_kbps: deps.storageBitrateKbps,
+      },
     })
 
     let appending: Promise<void> = Promise.resolve()
@@ -577,6 +624,8 @@ function startStream(
         chunk_ms: stream.chunk_ms,
         device,
         sample_rate: sampleRate,
+        storage_format: deps.storageFormat,
+        storage_bitrate_kbps: deps.storageBitrateKbps,
         ...(resolved.backend ? { backend: resolved.backend } : {}),
       },
     })
@@ -638,7 +687,16 @@ export function startAudioCapture({
   getWindow,
 }: AudioCaptureDeps): CaptureRunner {
   const echo = makeEchoSuppression(cfg)
-  const streamDeps: AudioStreamDeps = { blobs, store, transcription, events, echo, getWindow }
+  const streamDeps: AudioStreamDeps = {
+    blobs,
+    store,
+    transcription,
+    events,
+    echo,
+    storageFormat: cfg.format,
+    storageBitrateKbps: cfg.bitrate_kbps,
+    getWindow,
+  }
   const mic = startStream('mic', cfg.mic, cfg.sample_rate, streamDeps)
   const system =
     process.platform === 'darwin' && cfg.system.enabled && sck

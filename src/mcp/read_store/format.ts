@@ -70,8 +70,12 @@ export function numericRange(values: Array<number | null | undefined>): {
 
 export function mimeForKind(kind: ChunkRow['kind'], blob: string): string {
   const lower = blob.toLowerCase()
-  if (kind === 'screenshot')
-    return lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
+  if (kind === 'screenshot') {
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+    if (lower.endsWith('.webp')) return 'image/webp'
+    return 'image/png'
+  }
+  if (lower.endsWith('.webm')) return 'audio/webm; codecs=opus'
   return 'audio/wav'
 }
 

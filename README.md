@@ -281,8 +281,8 @@ The TUI attaches to a running daemon: it tails `daemon.log` for events and
 polls `levels.json` for the audio meters. It can also open with no daemon; use
 `x` to start captures from inside the TUI.
 When audio transcription is enabled, the TUI shows live Parakeet transcript
-segments for both microphone and mixer/system audio while durable WAV chunks are
-still being recorded.
+segments for both microphone and mixer/system audio while compact WebM/Opus
+chunks are recorded for replay.
 
 In Settings:
 
@@ -298,8 +298,11 @@ In Settings:
 --config <path>           config file, default ~/.hyprmnesia/config.yaml
 --data-dir <path>         where to store blobs and the index
 --screen-interval <ms>    screen capture interval
---screen-quality <n>      JPEG quality 1-100 (jpg format only)
+--screen-format <fmt>     image format: webp, jpg, or png
+--screen-quality <n>      lossy quality 1-100 (webp/jpg only)
 --screen-max-width <n>    downscale captures to fit width in px (0 = native)
+--audio-format <fmt>      audio blob format: webm or wav
+--audio-bitrate <n>       Opus bitrate kbps (webm only)
 --audio-chunk <ms>        chunk duration for mic and system audio
 --mic-device <name>       override mic device
 --system-device <name>    override system audio device
@@ -321,11 +324,13 @@ capture:
     enabled: true
     interval_ms: 5000
     monitor: primary
-    format: png
-    quality: 80      # JPEG quality 1-100 (ignored for png)
+    format: webp
+    quality: 80      # lossy quality 1-100 (webp/jpg; ignored for png)
     max_width: 0     # downscale to fit width in px; 0 keeps native resolution
   audio:
     sample_rate: 16000
+    format: webm
+    bitrate_kbps: 24 # Opus bitrate when format is webm
     echo_suppression:
       enabled: true
       system_threshold_db: -45
