@@ -53,6 +53,13 @@ interface McpConfig {
   }
 }
 
+export interface UpdateConfig {
+  // Check GitHub Releases for a newer version on `hpm start` and notify only —
+  // never auto-install. Disable here, or set HPM_NO_UPDATE_CHECK=1 / run under
+  // CI. `hpm update` checks on demand regardless of this flag.
+  check: boolean
+}
+
 export interface Config {
   capture: {
     screen: ScreenCaptureConfig
@@ -76,6 +83,7 @@ export interface Config {
     }
   }
   mcp: McpConfig
+  update: UpdateConfig
 }
 
 const defaultConfig: Config = {
@@ -140,6 +148,9 @@ const defaultConfig: Config = {
     auth: {
       enabled: true,
     },
+  },
+  update: {
+    check: true,
   },
 }
 
@@ -270,6 +281,13 @@ function normalizeConfig(config: Config): Config {
   }
   if (typeof config.mcp.auth.enabled !== 'boolean') {
     config.mcp.auth.enabled = defaultConfig.mcp.auth.enabled
+  }
+
+  if (!config.update || typeof config.update !== 'object') {
+    config.update = { ...defaultConfig.update }
+  }
+  if (typeof config.update.check !== 'boolean') {
+    config.update.check = defaultConfig.update.check
   }
   return config
 }

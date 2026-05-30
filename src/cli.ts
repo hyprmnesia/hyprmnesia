@@ -30,6 +30,7 @@ import { deriveBlobKey } from './store/blob_crypto'
 import { decryptBlobsToPlaintext, migrateBlobsToEncrypted } from './store/blob_migrate'
 import { getOrCreateIndexKey, readIndexKey } from './store/db_key'
 import { ensureDecrypted, ensureEncrypted } from './store/index_db'
+import { checkForUpdate, envOptOut, formatUpdateNotice, RELEASES_URL } from './update/check'
 import { defaultDbPath, expandHome } from './util/paths'
 import { VERSION } from './version'
 
@@ -146,6 +147,10 @@ usage:
   hpm mcp auth <command> manage MCP local auth token
   hpm replay [--from <time> --to <time>]
                          open an interactive local replay window
+  hpm update [--check] [--json]
+                         check GitHub for a newer release (notify only, never
+                         installs); opt out of the automatic check on start with
+                         HPM_NO_UPDATE_CHECK=1, CI=1, or update.check: false
   hpm version            print version
 
 flags (for hpm/start):
@@ -537,6 +542,62 @@ function cmdStatus(flags: Record<string, string | boolean>) {
   }
 }
 
+/**
+ * Checks GitHub for a newer release and reports it. Notification-only: it never
+ * downloads or installs anything. Always performs a fresh, opt-out-bypassing
+ * check because the user asked explicitly.
+ */
+async function cmdUpdate(flags: Record<string, string | boolean>) {
+  const status = await checkForUpdate({ force: true })
+
+  if (flags['json']) {
+    console.log(JSON.stringify(status))
+    return
+  }
+
+  if (status.offline && status.latestVersion === null) {
+    console.error('update check failed: could not reach GitHub. Try again later.')
+    process.exit(1)
+  }
+
+  if (status.offline) {
+    console.error('update check could not reach GitHub; showing cached release information.')
+  }
+
+  if (status.updateAvailable && status.latestVersion) {
+    console.log(
+      `A new Hyprmnesia release is available: ${status.currentVersion} -> ${status.latestVersion}`,
+    )
+    console.log(`  ${status.releaseUrl ?? RELEASES_URL}`)
+    console.log(
+      'Hyprmnesia does not self-update; download the release or use your package manager.',
+    )
+    return
+  }
+
+  console.log(`Hyprmnesia ${status.currentVersion} is up to date.`)
+}
+
+/**
+ * Prints a one-time-per-day update notice after `hpm start`, reading from the
+ * daily cache and refreshing it in the foreground only when stale. Stays silent
+ * on opt-out (env or config) and never lets a failed check affect startup.
+ *
+ * Runs after the daemon is already spawned and detached, so a slow check delays
+ * only the returning prompt — never capture.
+ */
+async function maybeNotifyUpdate(flags: Record<string, string | boolean>) {
+  if (envOptOut()) return
+  try {
+    const configPath = typeof flags['config'] === 'string' ? flags['config'] : undefined
+    if (!loadConfig(configPath).update.check) return
+    const notice = formatUpdateNotice(await checkForUpdate())
+    if (notice) console.log(`\n${notice}`)
+  } catch {
+    // Update checks are best-effort; never surface their failures on start.
+  }
+}
+
 function isInsideDir(path: string, dir: string): boolean {
   const rel = relative(resolve(dir), resolve(path))
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
@@ -699,6 +760,7 @@ switch (cmd) {
   case 'start':
     ensureTray(flags)
     cmdStartDaemon(flags)
+    await maybeNotifyUpdate(flags)
     break
   case '_daemon':
     cmdStartDaemon(flags)
@@ -743,6 +805,9 @@ switch (cmd) {
   case 'replay':
     ensureTray()
     await cmdReplay(flags)
+    break
+  case 'update':
+    await cmdUpdate(flags)
     break
   case 'version':
     console.log(VERSION)
