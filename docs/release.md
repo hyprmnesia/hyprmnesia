@@ -2,57 +2,77 @@
 
 > Back to the [README](../README.md).
 
-Hyprmnesia uses Changesets for version/changelog management and GitHub Actions
-for multi-OS installer builds. Releases are intentionally unsigned during alpha.
+Hyprmnesia uses Changesets for version and changelog management, plus GitHub
+Actions for version PRs, installer builds, release notes, and published release
+assets. Releases are intentionally unsigned during alpha.
 
-## 1. Add a changeset
+## Release checklist
 
-For any user-visible change:
+### 1. Add a changeset to every PR
+
+Every human-authored PR must include at least one `.changeset/*.md` file:
 
 ```sh
 bun run changeset
 ```
 
-Pick the appropriate bump and write a concise note. Commit the generated file
-under `.changeset/`.
+Pick the appropriate bump, write a concise release note, and commit the
+generated file with the PR. The CI `Changeset` job blocks PRs that do not touch
+`.changeset/*.md`. The only exception is the automated release branch
+`changeset-release/main`, which is created by Changesets.
 
-## 2. Merge the version PR
+### 2. Let Changesets open the version PR
 
-When changesets land on `main`, the `Release PR` workflow opens or updates a
-`chore: version packages` PR. That PR runs:
+When changesets land on `main`, the `Release PR` workflow opens or updates an
+automated PR titled `chore: version packages`. That PR runs:
 
 ```sh
 bun run version-packages
 ```
 
-It updates `package.json`, `CHANGELOG.md`, Rust crate versions, `Cargo.lock`,
-and `src/version.ts`.
+The command applies all pending changesets and updates:
 
-## 3. Tag the release
+- `package.json`
+- `CHANGELOG.md`
+- Rust crate versions
+- `Cargo.lock`
+- `src/version.ts`
 
-After merging the version PR, create and push a matching tag:
+Review the generated changelog and version changes, then merge the PR when the
+release is ready.
+
+### 3. Publish the release
+
+Merging the `changeset-release/main` version PR triggers the `Release` workflow.
+The workflow builds Windows, macOS, and Ubuntu artifacts, prepares release notes
+from `CHANGELOG.md`, writes checksums, and creates or updates the GitHub Release
+for the package version tag, such as `v0.4.1`.
+
+The release workflow can also run from a pushed `vX.Y.Z` tag:
 
 ```sh
 git checkout main
 git pull
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
-The tag must match `package.json.version`, including the leading `v`.
+For tag-triggered releases, the tag must match `package.json.version` with a
+leading `v`.
 
-## 4. Verify artifacts
+### 4. Verify artifacts
 
-The `Release` workflow builds on Windows, macOS, and Ubuntu. It publishes:
+The published GitHub Release should include:
 
 - Windows MSI and portable zip
 - macOS PKG and portable tarball
 - Debian/Ubuntu DEB and portable tarball
 - `SHA256SUMS`
 
-Before tagging a real release, run the `Release` workflow manually with
+Before publishing a real release, run the `Release` workflow manually with
 `workflow_dispatch` to produce dry-run artifacts without publishing a GitHub
-Release.
+Release. Download and smoke-test those artifacts if the change touches build,
+packaging, installer, or platform-specific behavior.
 
 ## Signing
 

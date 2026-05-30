@@ -6,3 +6,5 @@
   tray must check for an existing live tray before launching one.
 - Headless, test, and internal control paths should stop the daemon directly and
   must not launch the tray as a side effect.
+- Every PR must include at least one `.changeset/*.md` file; run
+  `bun run changeset` and commit the generated changeset with the PR.
