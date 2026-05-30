@@ -78,11 +78,8 @@ during `bun run build` (or on first `dev` invocation that needs them).
 
 **Requirements:** macOS 13 or later (ScreenCaptureKit).
 
-- OCR uses Tesseract on macOS. Install it before starting capture:
-
-  ```sh
-  brew install tesseract
-  ```
+- OCR uses the bundled native helper on macOS via Apple Vision. Tesseract is
+  only needed if you explicitly configure `processing.ocr.engine: tesseract`.
 
 - Screen capture and system-audio capture are handled by the native helper
   `hpm-sck`, built from `sck/`. **No BlackHole or loopback driver is required.**
@@ -221,7 +218,8 @@ your desktop at the login screen, then try again.
 Make sure either PulseAudio or `pipewire-pulse` is running. `pactl info` should
 print a server name.
 
-**macOS/Linux - screenshots are captured but OCR text is empty.**
+**Linux, or explicit Tesseract mode - screenshots are captured but OCR text is empty.**
 Confirm Tesseract is installed with `tesseract --version`. If it is installed in
 a custom location, set `processing.ocr.options.binary` in
-`~/.hyprmnesia/config.yaml` to the absolute binary path.
+`~/.hyprmnesia/config.yaml` to the absolute binary path. On macOS with the
+default `auto` engine, OCR should use the bundled Apple Vision helper instead.

@@ -280,6 +280,7 @@ function makeAudioConsumer(
   let lastLevelAt = 0
   let warnedOpusFallback = false
   let opusUnavailable = false
+  let finalizeQueue: Promise<void> = Promise.resolve()
 
   const encodeStoredAudio = async (
     pcm: Buffer,
@@ -339,13 +340,7 @@ function makeAudioConsumer(
     })
   }
 
-  const finalizeChunk = async () => {
-    if (!current || !current.inserted) {
-      current = undefined
-      return
-    }
-    const chunk = current
-    current = undefined
+  const finalizeChunk = async (chunk: AudioChunkState) => {
     const pcm = Buffer.concat(chunk.parts)
     const encoded = await encodeStoredAudio(pcm)
     if (encoded.fallback && !warnedOpusFallback) {
@@ -390,6 +385,26 @@ function makeAudioConsumer(
       rms_db,
       peak_db,
     })
+  }
+
+  const queueFinalizeChunk = (chunk: AudioChunkState | undefined) => {
+    if (!chunk || !chunk.inserted) return
+    finalizeQueue = finalizeQueue
+      .then(() => finalizeChunk(chunk))
+      .catch((err) => {
+        events.publish({
+          type: 'error',
+          source,
+          at: Date.now(),
+          message: `audio chunk finalize failed: ${String(err)}`,
+        })
+      })
+  }
+
+  const rotateChunk = () => {
+    const chunk = current
+    current = undefined
+    queueFinalizeChunk(chunk)
   }
 
   const feedAsr = (chunkId: string, pcm: Buffer, at: number) => {
@@ -444,14 +459,15 @@ function makeAudioConsumer(
       offset += takeBytes
       if (chunk.samples >= chunkSamples) {
         flushAsrBoundary()
-        await finalizeChunk()
+        rotateChunk()
       }
     }
   }
 
   const finalize = async () => {
     flushAsrBoundary()
-    await finalizeChunk()
+    rotateChunk()
+    await finalizeQueue
     await transcription.flush(source).catch((err) => {
       events.publish({
         type: 'error',
@@ -474,6 +490,8 @@ function publishDisabled(events: EventBus, source: AudioSource): CaptureRunner {
   })
   return NOOP_RUNNER
 }
+
+export const __testing = { makeAudioConsumer }
 
 function startSckSystemStream(
   stream: AudioStreamConfig,

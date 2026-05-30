@@ -37,6 +37,7 @@ export function setSettingValue(config: Config, path: SettingPath, value: unknow
 
 export function settingsFields(config: Config): SettingField[] {
   const ocrEngine = String(getSettingValue(config, ['processing', 'ocr', 'engine']))
+  const nativeOcrPlatform = process.platform === 'win32' || process.platform === 'darwin'
   const txEngine = String(getSettingValue(config, ['processing', 'transcription', 'engine']))
   return [
     {
@@ -195,7 +196,10 @@ export function settingsFields(config: Config): SettingField[] {
       label: 'OCR language',
       path: ['processing', 'ocr', 'options', 'lang'],
       kind: 'text',
-      hint: ocrEngine === 'tesseract' ? 'tesseract lang, e.g. eng/fra' : 'used by tesseract',
+      hint:
+        ocrEngine === 'native' || (ocrEngine === 'auto' && nativeOcrPlatform)
+          ? 'OS OCR auto-detects language'
+          : 'tesseract lang, e.g. eng/fra',
     },
     {
       label: 'Audio engine',

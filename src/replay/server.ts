@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
+import {
+  clearReplayTranscriptionSuppression,
+  setReplayTranscriptionSuppression,
+} from '../core/transcription_suppression'
 import { readBlobFile } from '../store/blob_crypto'
 import { readBlobKey, readIndexKey } from '../store/db_key'
 import { sliceRange } from './range'
@@ -345,6 +349,7 @@ const REPLAY_HTML = String.raw`<!doctype html>
           </select>
           <label><input id="system" type="checkbox" checked /> <strong>system</strong></label>
           <label><input id="mic" type="checkbox" /> mic</label>
+          <label><input id="suppressTranscription" type="checkbox" checked /> no re-transcribe</label>
           <label><input id="subs" type="checkbox" checked /> subtitles</label>
           <label><input id="contextToggle" type="checkbox" checked /> context</label>
           <label><input id="ocrToggle" type="checkbox" checked /> OCR</label>
@@ -382,20 +387,186 @@ const REPLAY_HTML = String.raw`<!doctype html>
         speed: document.getElementById('speed'),
         system: document.getElementById('system'),
         mic: document.getElementById('mic'),
+        suppressTranscription: document.getElementById('suppressTranscription'),
         subs: document.getElementById('subs'),
         contextToggle: document.getElementById('contextToggle'),
         ocrToggle: document.getElementById('ocrToggle'),
       };
-      const tracks = {
-        system: { id: null, audio: null },
-        mic: { id: null, audio: null },
-      };
+      const AUDIO_LOOKAHEAD_MS = 12_000;
+      const audioEngine = (() => {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        let ctx = null;
+        let generation = 0;
+        const tracks = {
+          system: { buffers: new Map(), sources: new Map() },
+          mic: { buffers: new Map(), sources: new Map() },
+        };
+
+        function enabled(source) {
+          return source === 'system' ? els.system.checked : els.mic.checked;
+        }
+
+        function ensureContext() {
+          if (!AudioCtx) return null;
+          if (!ctx) ctx = new AudioCtx();
+          if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+          return ctx;
+        }
+
+        function clearTrack(source) {
+          for (const entry of tracks[source].sources.values()) {
+            try { entry.node.stop(); } catch {}
+          }
+          tracks[source].sources.clear();
+        }
+
+        function stop() {
+          generation += 1;
+          clearTrack('system');
+          clearTrack('mic');
+        }
+
+        function loadBuffer(source, item) {
+          const track = tracks[source];
+          if (!item.blob_url) return Promise.resolve(null);
+          if (!track.buffers.has(item.id)) {
+            track.buffers.set(
+              item.id,
+              fetch(item.blob_url, { cache: 'force-cache' })
+                .then((response) => {
+                  if (!response.ok) throw new Error('HTTP ' + response.status);
+                  return response.arrayBuffer();
+                })
+                .then((data) => {
+                  const audioCtx = ensureContext();
+                  if (!audioCtx) return null;
+                  return audioCtx.decodeAudioData(data.slice(0));
+                })
+                .catch((err) => {
+                  console.warn('Replay audio decode failed for', item.id, err);
+                  track.buffers.delete(item.id);
+                  return null;
+                }),
+            );
+          }
+          return track.buffers.get(item.id);
+        }
+
+        function scheduleItem(source, item, buffer, seenGeneration) {
+          if (seenGeneration !== generation || !buffer || !manifest || !playing || !enabled(source)) return;
+          if (item.offset_end_ms === null || item.offset_end_ms <= currentMs) return;
+
+          const track = tracks[source];
+          if (track.sources.has(item.id)) return;
+
+          const audioCtx = ensureContext();
+          if (!audioCtx) return;
+
+          const rate = Math.max(0.25, Number(els.speed.value) || 1);
+          const startMs = Math.max(currentMs, item.offset_start_ms);
+          const endMs = Math.min(item.offset_end_ms, manifest.duration_ms);
+          const offsetMs = Math.max(0, item.blob_start_offset_ms + startMs - item.offset_start_ms);
+          const availableMs = Math.max(0, buffer.duration * 1000 - offsetMs);
+          const durationMs = Math.min(endMs - startMs, availableMs);
+          if (durationMs <= 0) return;
+
+          const node = audioCtx.createBufferSource();
+          node.buffer = buffer;
+          node.playbackRate.value = rate;
+          node.connect(audioCtx.destination);
+
+          const when = audioCtx.currentTime + Math.max(0, (startMs - currentMs) / 1000 / rate);
+          node.onended = () => {
+            const current = track.sources.get(item.id);
+            if (current?.node === node) track.sources.delete(item.id);
+          };
+          track.sources.set(item.id, { node });
+
+          try {
+            node.start(when, offsetMs / 1000, durationMs / 1000);
+          } catch (err) {
+            track.sources.delete(item.id);
+            console.warn('Replay audio schedule failed for', item.id, err);
+          }
+        }
+
+        function syncTrack(source) {
+          if (!manifest || !playing || !enabled(source)) {
+            clearTrack(source);
+            return;
+          }
+
+          const rate = Math.max(0.25, Number(els.speed.value) || 1);
+          const horizonMs = currentMs + AUDIO_LOOKAHEAD_MS * rate;
+          const seenGeneration = generation;
+
+          for (const item of manifest.audio[source]) {
+            if (!item.blob_url || item.offset_end_ms === null) continue;
+            if (item.offset_start_ms > horizonMs) break;
+            if (item.offset_end_ms <= currentMs) continue;
+            if (tracks[source].sources.has(item.id)) continue;
+
+            loadBuffer(source, item).then((buffer) => {
+              scheduleItem(source, item, buffer, seenGeneration);
+            });
+          }
+        }
+
+        return {
+          reset: stop,
+          stop,
+          sync() {
+            syncTrack('system');
+            syncTrack('mic');
+          },
+        };
+      })();
       let manifest;
       let currentMs = 0;
       let playing = false;
       let lastFrame = 0;
       let activeScreenshotId = null;
       let bounds = null;
+      let suppressionTimer = null;
+      const SUPPRESSION_TTL_MS = 8_000;
+      const SUPPRESSION_RENEW_MS = 3_000;
+
+      function wantsTranscriptionSuppressed() {
+        return playing && els.suppressTranscription.checked && (els.system.checked || els.mic.checked);
+      }
+
+      function postTranscriptionSuppression(active, keepalive = false) {
+        return fetch(api('/api/replay-transcription'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ active, ttl_ms: SUPPRESSION_TTL_MS }),
+          keepalive,
+        }).catch(() => {});
+      }
+
+      function updateTranscriptionSuppression() {
+        if (suppressionTimer) {
+          clearInterval(suppressionTimer);
+          suppressionTimer = null;
+        }
+        if (!wantsTranscriptionSuppressed()) {
+          postTranscriptionSuppression(false);
+          return;
+        }
+        postTranscriptionSuppression(true);
+        suppressionTimer = setInterval(() => {
+          if (wantsTranscriptionSuppressed()) postTranscriptionSuppression(true);
+          else updateTranscriptionSuppression();
+        }, SUPPRESSION_RENEW_MS);
+      }
+
+      function clearTranscriptionSuppression(keepalive = false) {
+        if (suppressionTimer) {
+          clearInterval(suppressionTimer);
+          suppressionTimer = null;
+        }
+        postTranscriptionSuppression(false, keepalive);
+      }
 
       function parseTimeParam(value) {
         if (!value) return NaN;
@@ -472,45 +643,15 @@ const REPLAY_HTML = String.raw`<!doctype html>
         return null;
       }
 
-      function setPaused(source) {
-        const track = tracks[source];
-        if (track.audio) track.audio.pause();
-        track.id = null;
-        track.audio = null;
-      }
-
-      function syncTrack(source) {
-        if (!manifest) return;
-        const enabled = source === 'system' ? els.system.checked : els.mic.checked;
-        const item = activeAudio(manifest.audio[source], currentMs);
-        if (!playing || !enabled || !item || !item.blob_url) {
-          setPaused(source);
-          return;
-        }
-        const track = tracks[source];
-        if (track.id !== item.id) {
-          setPaused(source);
-          track.id = item.id;
-          track.audio = new Audio(item.blob_url);
-        }
-        const wanted = Math.max(0, (currentMs - item.offset_start_ms + item.blob_start_offset_ms) / 1000);
-        try {
-          if (Math.abs(track.audio.currentTime - wanted) > 0.35) track.audio.currentTime = wanted;
-        } catch {}
-        track.audio.playbackRate = Number(els.speed.value);
-        if (track.audio.paused) track.audio.play().catch(() => {});
-      }
-
       function syncAudio() {
-        syncTrack('system');
-        syncTrack('mic');
+        audioEngine.sync();
       }
 
       function pause() {
         playing = false;
         els.play.textContent = 'Play';
-        setPaused('system');
-        setPaused('mic');
+        clearTranscriptionSuppression();
+        audioEngine.stop();
       }
 
       function play() {
@@ -519,6 +660,7 @@ const REPLAY_HTML = String.raw`<!doctype html>
         playing = true;
         lastFrame = performance.now();
         els.play.textContent = 'Pause';
+        updateTranscriptionSuppression();
         syncAudio();
       }
 
@@ -687,11 +829,23 @@ const REPLAY_HTML = String.raw`<!doctype html>
         els.seek.addEventListener('input', () => {
           currentMs = Number(els.seek.value);
           lastFrame = performance.now();
+          audioEngine.reset();
+          updateTranscriptionSuppression();
           render();
           syncAudio();
         });
-        for (const input of [els.speed, els.system, els.mic, els.subs, els.contextToggle, els.ocrToggle]) {
+        for (const input of [
+          els.speed,
+          els.system,
+          els.mic,
+          els.suppressTranscription,
+          els.subs,
+          els.contextToggle,
+          els.ocrToggle,
+        ]) {
           input.addEventListener('change', () => {
+            if (input === els.speed || input === els.system || input === els.mic) audioEngine.reset();
+            updateTranscriptionSuppression();
             render();
             syncAudio();
           });
@@ -704,14 +858,21 @@ const REPLAY_HTML = String.raw`<!doctype html>
           }
           if (event.key === 'ArrowLeft') {
             currentMs -= event.shiftKey ? 30000 : 5000;
+            audioEngine.reset();
+            updateTranscriptionSuppression();
             render();
             syncAudio();
           }
           if (event.key === 'ArrowRight') {
             currentMs += event.shiftKey ? 30000 : 5000;
+            audioEngine.reset();
+            updateTranscriptionSuppression();
             render();
             syncAudio();
           }
+        });
+        window.addEventListener('beforeunload', () => {
+          clearTranscriptionSuppression(true);
         });
         setInterval(() => fetch(api('/api/ping'), { cache: 'no-store' }).catch(() => {}), 2000);
         render();
@@ -744,7 +905,7 @@ export async function startReplayServer(options: ReplayServerOptions): Promise<v
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url)
       if (!isAuthorized(url))
         return new Response('forbidden', { status: 403, headers: noStoreHeaders() })
@@ -787,6 +948,31 @@ export async function startReplayServer(options: ReplayServerOptions): Promise<v
         lastPing = Date.now()
         return Response.json({ ok: true }, { headers: noStoreHeaders() })
       }
+      if (url.pathname === '/api/replay-transcription') {
+        if (req.method !== 'POST') {
+          return new Response('method not allowed', { status: 405, headers: noStoreHeaders() })
+        }
+        let active = false
+        let ttlMs: number | undefined
+        try {
+          const raw = await req.text()
+          if (raw.trim()) {
+            const body = JSON.parse(raw)
+            active = body?.active === true
+            ttlMs = typeof body?.ttl_ms === 'number' ? body.ttl_ms : undefined
+          }
+        } catch {
+          return new Response('bad request', { status: 400, headers: noStoreHeaders() })
+        }
+
+        if (active) {
+          const until = setReplayTranscriptionSuppression({ owner: authToken, ttlMs })
+          return Response.json({ active: true, until }, { headers: noStoreHeaders() })
+        }
+
+        clearReplayTranscriptionSuppression({ owner: authToken })
+        return Response.json({ active: false }, { headers: noStoreHeaders() })
+      }
       const blobMatch = url.pathname.match(/^\/blob\/([^/]+)$/)
       if (blobMatch?.[1]) {
         const id = decodeURIComponent(blobMatch[1])
@@ -825,6 +1011,7 @@ export async function startReplayServer(options: ReplayServerOptions): Promise<v
       if (done) return
       done = true
       clearInterval(staleTimer)
+      clearReplayTranscriptionSuppression({ owner: authToken })
       server.stop(true)
       resolve()
     }
