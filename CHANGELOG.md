@@ -1,5 +1,11 @@
 # hyprmnesia
 
+## 0.5.1
+
+### Patch Changes
+
+- [#74](https://github.com/hyprmnesia/hyprmnesia/pull/74) [`c6b0cab`](https://github.com/hyprmnesia/hyprmnesia/commit/c6b0cabbf786d8521c0b6823b6d49d09edfc718a) Thanks [@julpel8](https://github.com/julpel8)! - Add native macOS OCR through Apple Vision so the automatic OCR engine works without Tesseract.
+
 ## 0.5.0
 
 ### Minor Changes
