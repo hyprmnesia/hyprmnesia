@@ -91,6 +91,7 @@ bun run src/cli.ts status     # print daemon status
 bun run src/cli.ts status --json
 bun run src/cli.ts mcp        # run the read-only MCP stdio server
 bun run src/cli.ts replay     # open the local browser replay viewer
+bun run src/cli.ts update     # check GitHub for a newer release
 ```
 
 After building:
@@ -106,6 +107,7 @@ bun run build                 # produces dist/hpm
 ./dist/hpm status --json
 ./dist/hpm mcp                # read-only MCP stdio server
 ./dist/hpm replay             # open the local browser replay viewer
+./dist/hpm update             # check GitHub for a newer release
 ```
 
 `dist/hpm` is the user-facing entrypoint. Native helpers are built
@@ -209,6 +211,23 @@ The server is read-only, bound to localhost, and auto-shuts down after 15s of
 inactivity once the browser tab has been opened (Ctrl-C to stop earlier in
 `--no-open` mode). It can also be opened directly from the tray
 (`Open Replay...`).
+
+## Updates
+
+Hyprmnesia checks the GitHub Releases API for a newer version and **only
+notifies** — it never downloads or installs anything.
+
+```sh
+hpm update            # check now and report; suggests how to upgrade
+hpm update --json     # machine-readable status
+```
+
+On `hpm start`, a one-line notice is shown when a newer release exists. That
+automatic check is cached for 24h in `~/.hyprmnesia/update-check.json` (using a
+conditional ETag request), runs after the daemon is already started with a short
+timeout, and never blocks capture or fails startup. Disable it with
+`update.check: false` in `config.yaml`, or by setting `HPM_NO_UPDATE_CHECK=1` or
+`CI=1`. `hpm update` always checks on demand regardless of those settings.
 
 ## Tray App
 
@@ -351,6 +370,8 @@ mcp:
   port: 37373
   auth:
     enabled: true
+update:
+  check: true        # notify on `hpm start` when a newer release exists
 ```
 
 OCR engines: `auto`, `native`, `tesseract`, `noop`.
