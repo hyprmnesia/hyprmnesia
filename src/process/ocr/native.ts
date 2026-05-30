@@ -8,8 +8,8 @@ import type { OcrEngine } from '../types'
 
 // engine that delegates to the hpm-ocr native helper.
 // on Windows: hpm-ocr uses Windows.Media.Ocr (built into Windows 10+).
-// other platforms are not implemented in hpm-ocr yet — `ready()` returns false
-// so the `auto` engine can fall back to tesseract.
+// on macOS: hpm-ocr uses Apple's Vision text recognition framework.
+// other platforms return false so the `auto` engine can fall back to tesseract.
 
 function binaryName(): string {
   return process.platform === 'win32' ? 'hpm-ocr.exe' : 'hpm-ocr'
@@ -79,10 +79,8 @@ export class NativeOcr implements OcrEngine {
       this.readyCache = false
       return false
     }
-    // probe: if the binary is on an unsupported platform it will exit non-zero
-    // with an `unsupported` engine name.
     this.binary = bin
-    if (process.platform !== 'win32') {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
       this.readyCache = false
       return false
     }

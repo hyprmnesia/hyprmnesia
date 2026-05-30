@@ -59,7 +59,7 @@ fn missing_file_returns_error_json_and_nonzero_exit() {
     );
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 #[test]
 fn existing_file_on_unsupported_platform_returns_stable_error_json() {
     use std::fs;
@@ -87,6 +87,94 @@ fn existing_file_on_unsupported_platform_returns_stable_error_json() {
             .and_then(Value::as_str)
             .is_some_and(|msg| msg.contains("not implemented")),
         "got: {value}",
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn existing_image_on_macos_uses_apple_vision() {
+    use std::fs;
+
+    let path = std::env::temp_dir().join(format!(
+        "hpm-ocr-vision-{}-{}.png",
+        std::process::id(),
+        unique_suffix()
+    ));
+    render_macos_text_fixture(&path);
+    let path_str = path.to_string_lossy().to_string();
+
+    let (status, value) = run(&[path_str.as_str()]);
+
+    fs::remove_file(&path).ok();
+    assert!(status.success(), "Vision OCR should succeed: {value}");
+    assert_eq!(value.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        value.get("engine").and_then(Value::as_str),
+        Some("apple-vision-ocr")
+    );
+    let text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_uppercase();
+    assert!(
+        text.contains("OCR") && text.contains("TEST"),
+        "expected OCR TEST in recognized text, got: {value}",
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn render_macos_text_fixture(path: &std::path::Path) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let script = r#"
+import AppKit
+import Foundation
+
+let out = CommandLine.arguments[1]
+let width = 520
+let height = 150
+let image = NSImage(size: NSSize(width: width, height: height))
+image.lockFocus()
+NSColor.white.setFill()
+NSRect(x: 0, y: 0, width: width, height: height).fill()
+let text = "OCR TEST"
+let attrs: [NSAttributedString.Key: Any] = [
+    .font: NSFont.boldSystemFont(ofSize: 64),
+    .foregroundColor: NSColor.black
+]
+let textSize = text.size(withAttributes: attrs)
+let point = NSPoint(x: (Double(width) - textSize.width) / 2.0, y: (Double(height) - textSize.height) / 2.0)
+text.draw(at: point, withAttributes: attrs)
+image.unlockFocus()
+
+guard let tiff = image.tiffRepresentation,
+      let bitmap = NSBitmapImageRep(data: tiff),
+      let png = bitmap.representation(using: .png, properties: [:]) else {
+    fatalError("failed to render OCR fixture")
+}
+try png.write(to: URL(fileURLWithPath: out))
+"#;
+
+    let mut child = Command::new("swift")
+        .arg("-")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn swift to render OCR fixture");
+    child
+        .stdin
+        .as_mut()
+        .expect("swift stdin")
+        .write_all(script.as_bytes())
+        .expect("write swift fixture script");
+    let output = child.wait_with_output().expect("wait for swift fixture");
+    assert!(
+        output.status.success(),
+        "swift fixture render failed: {}",
+        String::from_utf8_lossy(&output.stderr),
     );
 }
 

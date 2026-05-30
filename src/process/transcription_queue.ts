@@ -4,6 +4,7 @@
 
 import { randomUUIDv7 } from 'bun'
 import type { AudioSource, EventBus } from '../core/events'
+import { isReplayTranscriptionSuppressed } from '../core/transcription_suppression'
 import type { ChunkStore } from '../store/db'
 import type {
   PcmAudioFrame,
@@ -13,10 +14,13 @@ import type {
 } from './types'
 
 export class TranscriptionQueue {
+  private suppressedSources = new Set<AudioSource>()
+
   constructor(
     private engine: TranscriptionEngine,
     private store: ChunkStore,
     private events: EventBus,
+    private opts: { isReplaySuppressed?: () => boolean } = {},
   ) {}
 
   async start(): Promise<void> {
@@ -27,6 +31,28 @@ export class TranscriptionQueue {
   }
 
   submitPcm(frame: PcmAudioFrame): void {
+    const suppressed = this.opts.isReplaySuppressed?.() ?? isReplayTranscriptionSuppressed()
+    if (suppressed) {
+      if (!this.suppressedSources.has(frame.source)) {
+        this.suppressedSources.add(frame.source)
+        this.engine.flush(frame.source).catch((err) => {
+          this.events.publish({
+            type: 'log',
+            at: Date.now(),
+            level: 'warn',
+            message: `ASR flush failed while suppressing replay transcription: ${err}`,
+          })
+        })
+        this.events.publish({
+          type: 'log',
+          at: Date.now(),
+          level: 'info',
+          message: `ASR ${frame.source} suppressed while replay audio is playing`,
+        })
+      }
+      return
+    }
+    this.suppressedSources.clear()
     this.engine.submitPcm(frame)
   }
 
