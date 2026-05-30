@@ -1,5 +1,13 @@
 # hyprmnesia
 
+## 0.4.1
+
+### Patch Changes
+
+- [#67](https://github.com/hyprmnesia/hyprmnesia/pull/67) [`d57296e`](https://github.com/hyprmnesia/hyprmnesia/commit/d57296e7ddb02bd45f00678912d15cf3b1bdc394) Thanks [@julpel8](https://github.com/julpel8)! - Document the release checklist and PR changeset requirement.
+
+- [#68](https://github.com/hyprmnesia/hyprmnesia/pull/68) [`fc8ef13`](https://github.com/hyprmnesia/hyprmnesia/commit/fc8ef13261d73127af57cc59549ea9f884b04282) Thanks [@julpel8](https://github.com/julpel8)! - Simplify the app logo to a plain blue H on black and use native-style macOS/Linux tray status icons.
+
 ## 0.4.0
 
 ### Minor Changes
